@@ -1,0 +1,142 @@
+---
+title: "Tech stack: Next.js, Framer Motion, Feishu CMS"
+description: "A full overview of the HNU-TimeLetter frontend stack, toolchain, external services, directory conventions, and TypeScript engineering constraints."
+---
+
+HNU-TimeLetter is built on Next.js 16 with the App Router, TypeScript 5 in strict mode, and Tailwind CSS v4 for styling. Animation is handled by Framer Motion v12 for opening sequences, transition overlays, and card effects, while Lenis provides buttery smooth scroll on the desktop unlocked state. Global UI state lives in Zustand v5, and component primitives come from Radix UI surfaced through the Shadcn/UI pattern. Turbopack is the default bundler during development. In production the app reads CMS data from Feishu Bitable, stores binary assets in Aliyun OSS, and deploys to a self-hosted server (Vercel static export is also supported).
+
+## Core framework
+
+<CardGroup cols={2}>
+  <Card title="Next.js 16.1.6" icon="layer-group">
+    App Router with React 19. Server Components handle data loading; Client Components own interactive state. `src/proxy.ts` guards the `/admin` route group.
+  </Card>
+  <Card title="TypeScript 5 strict" icon="code">
+    All source files under `src/` are compiled in strict mode. The `agents/` directory is explicitly excluded from `tsconfig.json` to keep collaboration assets out of the build graph.
+  </Card>
+  <Card title="Tailwind CSS v4" icon="paintbrush">
+    Utility-first styling with `@tailwindcss/postcss` v4 and `tw-animate-css` for declarative keyframe utilities. `tailwind-merge` resolves class conflicts at the component boundary.
+  </Card>
+  <Card title="Turbopack" icon="bolt">
+    Next.js default bundler for `next dev`. Provides significantly faster HMR compared to the legacy webpack pipeline. No separate configuration required.
+  </Card>
+</CardGroup>
+
+## UI and animation
+
+<CardGroup cols={2}>
+  <Card title="Framer Motion v12.34" icon="sparkles">
+    Drives the envelope opening sequence, full-screen transition overlay, story card animations, and scroll-triggered section reveals throughout the experience.
+  </Card>
+  <Card title="Lenis v1.3.23" icon="arrow-down">
+    Smooth-scroll library wrapping native scroll events. Active on desktop in the unlocked (post-envelope) state. Encapsulated in `src/lib/useVirtualScroll.ts`.
+  </Card>
+  <Card title="Radix UI v1.4.3 / Shadcn" icon="component">
+    Accessible, unstyled primitives from Radix UI composed into styled components under `src/components/ui/`. Do not modify these files' logic directly; extend by composition.
+  </Card>
+  <Card title="Lucide React v0.563" icon="shapes">
+    Icon library for admin UI and navigation controls. Tree-shaken per-icon at build time.
+  </Card>
+</CardGroup>
+
+## State management
+
+<CardGroup cols={2}>
+  <Card title="Zustand v5.0.11" icon="database">
+    Lightweight global state store defined in `src/lib/store.ts`. Manages envelope open state, intro animation readiness, and full-screen transition flag. No context provider required.
+  </Card>
+  <Card title="React 19.2.3" icon="react">
+    Concurrent features and the new compiler (`babel-plugin-react-compiler 1.0.0`) are active. Server Actions and streaming are available via Next.js App Router conventions.
+  </Card>
+</CardGroup>
+
+## External services
+
+<CardGroup cols={2}>
+  <Card title="Feishu Bitable" icon="table">
+    Single source of truth for all CMS data: story records, creation board ideas, location coordinates, and contributor credits. Accessed via the Feishu Open API during sync runs.
+  </Card>
+  <Card title="Aliyun OSS" icon="cloud">
+    Object storage for avatar images and full-size story illustrations. Attachments are downloaded from Feishu, re-uploaded to OSS, and the resulting URLs are written back to Feishu fields and persisted in the local JSON outputs.
+  </Card>
+  <Card title="Vercel / Self-hosted" icon="server">
+    Primary deployment target is a self-hosted single-instance Node.js server so that `node-schedule` and the persistent sync job store work without a serverless timeout. Vercel static export is also supported for read-only deployments.
+  </Card>
+  <Card title="node-schedule v2.1.1" icon="clock">
+    In-process cron scheduler for automatic periodic syncs. Defined in `src/lib/admin/scheduler.ts`. Only appropriate for the single-instance server deployment model.
+  </Card>
+</CardGroup>
+
+## Build scripts
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `next dev` | Start development server with Turbopack |
+| `build` | `next build` | Production build (no sync) |
+| `build:with-sync` | `npm run sync && npm run build` | Sync then build |
+| `publish` | `npm run sync && npm run build` | Alias for CI/CD publish flow |
+| `sync` | `tsx src/scripts/sync-feishu.ts` | Pull from Feishu and write JSON outputs |
+| `lint` | `eslint` | Run ESLint across `src/` |
+| `test:e2e` | `playwright test` | Run Playwright end-to-end suite |
+
+## Directory structure
+
+```text
+src/
+├── app/
+│   ├── admin/              # /admin back-office pages (login + protected group)
+│   ├── api/admin/          # Admin API routes (auth, sync config, sync jobs)
+│   ├── creation/           # /creation creation board route
+│   ├── map/                # /map interactive map experience route
+│   ├── layout.tsx          # Global layout and local font registration
+│   └── page.tsx            # Home page (envelope opening + scroll sections)
+├── components/
+│   ├── ui/                 # Shadcn-style base components (do not modify logic)
+│   ├── shared/             # Shared business components
+│   │                       #   EnvelopeIntro, GuideLine, CustomScrollbar,
+│   │                       #   GlobalNav, TransitionOverlay
+│   ├── sections/           # Scroll section group
+│   │                       #   AboutProject, AboutUs, Credits, Footer, ScrollSections
+│   ├── desktop/            # Desktop-only components (interactive map, story panel)
+│   ├── mobile/             # Mobile-only components (static map modal, story feed)
+│   └── creation/           # /creation masonry card components
+├── lib/
+│   ├── admin/              # Back-office auth, scheduler, config read/write
+│   ├── sync-service.ts     # Feishu + OSS sync main service (CLI and API shared)
+│   ├── types.ts            # Core domain types — single source of truth
+│   ├── store.ts            # Zustand global state
+│   ├── hooks.ts            # Shared React hooks
+│   ├── useVirtualScroll.ts # Lenis smooth scroll wrapper
+│   └── content.ts / utils.ts
+├── config/                 # admin.json, locations.json and other local config
+├── data/                   # Sync outputs: content.json, creation-board.json,
+│                           #   contributors.json
+└── scripts/                # sync-feishu.ts and Feishu/OSS debug scripts
+```
+
+<Note>
+The repository root also contains `agents/`, `.opencode/agents/`, and `.trae/skills/` directories. These serve the development workflow and are **not** part of the `src/` runtime boundary. They are excluded from TypeScript compilation via `tsconfig.json`.
+</Note>
+
+## Engineering constraints
+
+### TypeScript compile scope
+
+`tsconfig.json` explicitly excludes the `agents/` directory. This prevents AI collaboration assets from entering the application compilation graph and interfering with `npm run build`. Any TypeScript inside `agents/` is treated as out-of-band tooling, not application code.
+
+### Collaboration assets boundary
+
+| Directory | Purpose | In build? |
+|---|---|---|
+| `src/` | Application source | Yes |
+| `agents/` | AI agent definitions | No |
+| `.opencode/agents/` | OpenCode skill assets | No |
+| `.trae/skills/` | Trae skill assets | No |
+
+### Local tooling
+
+`opencode.json` in the repository root registers a project-scoped Playwright MCP server for local development assistance. It does not participate in the production build or runtime.
+
+### Build failure safety
+
+When running `sync-data-and-publish` jobs, the publish phase is a separate step from the sync phase. A failed `next build` must not affect the currently running production version. The recommended flow is: sync → write JSON → validate → build → health check → restart. See [Data sync system](/architecture/data-sync) for the full publish model.

@@ -1,81 +1,140 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Get started with HNU-TimeLetter"
+description: "Clone the repo, configure live Feishu and Aliyun OSS credentials, sync data, and run the development server in five steps — no mock data included."
 ---
 
-## Get started in three steps
+HNU-TimeLetter does not ship with any mock or seed data. Every story, character image, and creation board entry is sourced live from a Feishu Bitable spreadsheet and served through Aliyun OSS. Before you can run the site locally you need access to both services. If you only have the repository and no credentials, start by reading the [environment setup guide](/environment-setup) to understand which variables are required and how to provision them.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  Live Feishu and Aliyun OSS credentials are required. Running `npm run dev` without first completing a successful `npm run sync` will result in an empty site — no stories, no map pins, no creation board entries.
+</Note>
 
-### Step 1: Set up your local environment
+## Setup steps
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Clone the repository and install dependencies">
+    Clone the repository and install all Node.js dependencies. The project requires **Node.js >= 20**.
 
-### Step 2: Deploy your changes
+    <CodeGroup>
+      ```bash macOS / Linux
+      git clone <repository-url>
+      cd HNU-TimeLetter
+      npm install
+      ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+      ```powershell Windows
+      git clone <repository-url>
+      cd HNU-TimeLetter
+      npm install
+      ```
+    </CodeGroup>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    After installation, verify your Node.js version:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    node --version   # must print v20.x.x or higher
+    ```
+  </Step>
 
-### Step 3: Go live
+  <Step title="Configure environment variables">
+    Copy the example environment file and fill in your credentials:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    <CodeGroup>
+      ```bash macOS / Linux
+      cp .env.example .env.local
+      ```
+
+      ```powershell Windows
+      copy .env.example .env.local
+      ```
+    </CodeGroup>
+
+    Open `.env.local` and populate all required values. The file structure looks like this:
+
+    ```env .env.local
+    # Feishu base config (homepage story table)
+    FEISHU_APP_ID=cli_...
+    FEISHU_APP_SECRET=...
+    FEISHU_APP_TOKEN=...
+    FEISHU_TABLE_ID=...
+    FEISHU_VIEW_ID=...
+
+    # Creation board (optional — falls back to built-in defaults if unset)
+    FEISHU_CREATION_TABLE_ID=your_creation_table_id
+    FEISHU_CREATION_VIEW_ID=...
+
+    # Contributors table
+    FEISHU_CONTRIBUTORS_TABLE_ID=tbl1aSvNwBjlVJzd
+
+    # Aliyun OSS
+    ALIYUN_OSS_REGION=oss-cn-guangzhou
+    ALIYUN_OSS_BUCKET=your-bucket-name
+    ALIYUN_OSS_ACCESS_KEY_ID=your_access_key_id
+    ALIYUN_OSS_ACCESS_KEY_SECRET=your_access_key_secret
+
+    # Admin back-office password (/admin login — defaults to "admin" if unset)
+    ADMIN_PASSWORD=change-me
+    ```
+
+    Key variables explained:
+
+    | Variable | Description |
+    |---|---|
+    | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | OAuth credentials from the Feishu developer console |
+    | `FEISHU_APP_TOKEN` | The Bitable app token (from the table URL) |
+    | `FEISHU_TABLE_ID` / `FEISHU_VIEW_ID` | Story table ID and the specific view to read from |
+    | `FEISHU_CREATION_TABLE_ID` / `FEISHU_CREATION_VIEW_ID` | Creation board table (optional) |
+    | `ALIYUN_OSS_REGION` | OSS region, e.g. `oss-cn-guangzhou` |
+    | `ALIYUN_OSS_BUCKET` | Your OSS bucket name (must have public-read ACL) |
+    | `ALIYUN_OSS_ACCESS_KEY_ID` / `ALIYUN_OSS_ACCESS_KEY_SECRET` | Aliyun RAM user access key |
+    | `ADMIN_PASSWORD` | Password for `/admin` — **change before deploying to production** |
+
+    <Warning>
+      If `ADMIN_PASSWORD` is not set, the back-office login falls back to the string `admin`. Always override this before deploying to any non-local environment.
+    </Warning>
+  </Step>
+
+  <Step title="Run the data sync">
+    Pull the latest content from Feishu and upload images to OSS:
+
+    ```bash
+    npm run sync
+    ```
+
+    This runs `src/scripts/sync-feishu.ts` via `tsx`. The script:
+
+    1. Fetches all story records from the Feishu table defined by `FEISHU_APP_TOKEN` + `FEISHU_TABLE_ID`.
+    2. Downloads attached images, computes an MD5 hash for deduplication, and uploads new files to your OSS bucket.
+    3. Writes permanent OSS URLs back to the Feishu table's `OSS_URL` fields.
+    4. Writes the final data to `src/config/locations.json` (map pins), `src/data/content.json` (homepage stories), `src/data/creation-board.json` (creation board), and `src/data/contributors.json` (credits).
+
+    A successful sync ends with all four files written.
+  </Step>
+
+  <Step title="Start the development server">
+    Start Next.js in development mode with Turbopack:
+
+    ```bash
+    npm run dev
+    ```
+
+    The server starts on port 3000 by default.
+  </Step>
+
+  <Step title="Verify the site is running">
+    Open your browser and navigate to the following URLs:
+
+    | URL | What you should see |
+    |---|---|
+    | `http://localhost:3000` | Homepage with the envelope-opening intro and campus map |
+    | `http://localhost:3000/creation` | Community creation board with sticky-note waterfall |
+    | `http://localhost:3000/admin` | Admin login page (password set via `ADMIN_PASSWORD`) |
+
+    If the homepage shows no stories or map pins, re-check that `src/data/content.json` was generated by `npm run sync` and that your Feishu view contains published records.
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+- Read the [environment setup guide](/environment-setup) for a full reference of all environment variables, npm scripts, branch strategy, and Playwright E2E testing setup.
+- See the Feishu CMS configuration guide for detailed instructions on setting up the Bitable table fields and permissions.

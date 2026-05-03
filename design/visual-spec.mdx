@@ -1,0 +1,244 @@
+---
+title: "Visual design system: colors, typography, and tokens"
+description: "HNU-TimeLetter design tokens: color palette, responsive type scale, border radii, elevation shadows, and animation principles for the paper letter aesthetic."
+---
+
+The HNU-TimeLetter visual system is built around a single guiding metaphor: a **纸本情书** — a paper letter received in person. Every color, typeface, and motion decision serves this aesthetic. The stage is a warm-grey paper surface; a deep crimson anchors emotional weight; copper-gold appears only as accent detail. Layouts favor generous white space, strong headings, and restrained use of emphasis color. The goal is "private correspondence and a commemorative album," not a campus information portal.
+
+## Color palette
+
+All colors are defined as CSS custom properties in `src/app/globals.css` and exposed to Tailwind via `@theme inline`. Use semantic token names exclusively — never hardcoded hex values or `text-stone-*` utilities.
+
+| Token name | Hex value | Usage |
+|---|---|---|
+| Background | `#ece9e4` | Page base, global canvas, large negative-space regions |
+| Surface | `#f6f1eb` | Cards, modals, drawers, inner letter panels |
+| Surface Strong | `#e2d7cf` | Secondary sections, scroll strip, timeline bars, floating strips |
+| Primary | `#c23643` | Primary buttons, selected state, active story, key CTAs, link highlights |
+| Primary Deep | `#a92d38` | Button hover/press state, dark wax-seal edges |
+| Neutral Light | `#e55966` | Secondary tag backgrounds, softened selected states, light hint blocks |
+| Font Light | `#e7d0d0` | Reversed text on dark/colored backgrounds, title highlight layers, tag backgrounds |
+| Ink Strong | `#342628` | Large headings, lead-in emphasis, critical notes |
+| Font Dark | `#563B3B` | Body text, descriptions, component content text |
+| Ink Muted | `#7a6664` | Dates, locations, meta information, descriptive labels |
+| Border | `#cbbdb5` | Card outlines, input field borders, dividers |
+| Neutral Dark | `#634725` | Stamp edges, wax-seal metallic reflections, decorative lines, badge outlines |
+| Focus Ring | `rgba(229, 89, 102, 0.28)` | Keyboard focus outline, accessibility interaction ring |
+
+<Note>
+Border opacity must be at least 14% to remain visible against the paper background. Never use `border-opacity` values below this threshold.
+</Note>
+
+### Semantic Tailwind classes
+
+Use these class names in components. They map directly to the token table above via the `@theme inline` block.
+
+| Tailwind class | Resolves to |
+|---|---|
+| `bg-background` | Background `#ece9e4` |
+| `bg-card` | Surface `#f6f1eb` |
+| `text-foreground` | Ink Strong `#342628` |
+| `text-muted-foreground` | Ink Muted `#7a6664` |
+| `bg-primary` | Primary `#c23643` |
+| `border-border` | Border `#cbbdb5` |
+
+<Warning>
+Do not use `text-stone-*`, `bg-[#xxxxxx]`, or any hardcoded color values in component code. All color decisions must flow through the token system defined in `globals.css`.
+</Warning>
+
+## Typography
+
+### Typefaces
+
+Two custom fonts define the entire site. Both are loaded in `src/app/layout.tsx` and mapped to Tailwind's `font-serif` (headings) and `font-sans` (body) utilities.
+
+| Role | Font file | Tailwind class |
+|---|---|---|
+| Headings | `public/ChillDINGothic_SemiBold.otf` | `font-serif` |
+| Body | `public/ZouLDFXKAJ.ttf` | `font-sans` |
+
+Fallback stack for headings: `PingFang SC`, `Microsoft YaHei`, `sans-serif`.
+Body font falls back first to the heading font, then to the system Chinese font stack.
+
+### Responsive type scale
+
+All font sizes use `clamp()` to scale fluidly between viewport sizes. These variables are the **single source of truth** — never introduce additional size variables.
+
+```css
+--text-h1:    clamp(2.5rem, 5vw + 1rem, 5rem);
+--text-h2:    clamp(2rem, 3.5vw + 0.5rem, 3.5rem);
+--text-h3:    clamp(1.5rem, 2.5vw, 2.5rem);
+--text-intro: clamp(1.125rem, 1.8vw, 1.75rem);
+--text-base:  clamp(1rem, 0.8vw + 0.5rem, 1.125rem);
+```
+
+### Heading rules
+
+All `h1`, `h2`, `h3` share the same base rules:
+
+```css
+h1, h2, h3 {
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0.12em; /* baseline 0.08em × 1.5 */
+  margin-top: 0;
+  margin-bottom: 0.8em;
+}
+```
+
+<Tip>
+Letter-spacing of `0.12em` is intentional — it is 1.5× the baseline `0.08em` to reinforce the "breathing" quality of editorial headings. Do not reduce it.
+</Tip>
+
+### Body text classes
+
+Two utility classes handle all prose content. They are defined in `globals.css` under `@layer components` so Tailwind utilities can override them without `!important`.
+
+```css
+/* Intro / lead text — section openers, chapter introductions */
+.text-intro {
+  font-size: var(--text-intro);
+  line-height: 1.7;
+  font-weight: 400;
+  letter-spacing: 0.075em;
+  max-width: 800px;
+  margin-bottom: 3rem;
+}
+
+/* Reading body — long-form narrative, detail descriptions */
+.text-reading {
+  font-size: var(--text-base);
+  line-height: 2;
+  font-weight: 300;
+  letter-spacing: 0.045em;
+  max-width: 65ch;
+  margin-bottom: 2rem;
+}
+```
+
+### HTML rendering baseline
+
+```css
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  font-size: var(--text-base);
+  line-height: 1.8;
+  margin: 0;
+}
+```
+
+### Excluded combinations
+
+The following typographic patterns are explicitly **not permitted** in this codebase:
+
+- Heading `font-weight: 800`
+- Negative `letter-spacing` on any heading
+- Heading `line-height: 1.1`
+- Intro text `line-height: 1.5`
+- Reading body `line-height: 1.8`
+- Any font-size variable outside the five defined above
+
+## Spacing, radius, and shadows
+
+### Border radius
+
+<CardGroup cols={2}>
+  <Card title="Base Radius — 20px" icon="square">
+    Interactive controls, small containers, inline elements.
+  </Card>
+  <Card title="Panel Radius — 28px" icon="rectangle-horizontal">
+    Cards, drawers, side panels. Maps to `--radius` (`1.25rem`) plus step increments.
+  </Card>
+  <Card title="Modal Radius — 32px" icon="square-dashed">
+    Modals, full-screen overlays, story detail panels.
+  </Card>
+  <Card title="Pill Radius — 999px" icon="pill">
+    Tags, badges, navigation capsule, selected-state indicators.
+  </Card>
+</CardGroup>
+
+### Elevation shadows
+
+```css
+/* Standard card */
+--paper-shadow: 0 24px 60px rgba(69, 39, 40, 0.12);
+
+/* Hovered card */
+--paper-shadow-hover: 0 32px 80px rgba(69, 39, 40, 0.16);
+
+/* Inner paper highlight — applied inside .paper-panel */
+inset 0 1px 0 rgba(255, 255, 255, 0.56);
+```
+
+The `.paper-panel` utility class bundles all three layers together with a `backdrop-filter: blur(14px)` glass effect:
+
+```css
+.paper-panel {
+  background: linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(246,241,235,0.96) 100%);
+  border: 1px solid rgba(203, 189, 181, 0.72);
+  box-shadow: var(--paper-shadow), inset 0 1px 0 rgba(255,255,255,0.56);
+  backdrop-filter: blur(14px);
+}
+```
+
+## Animation principles
+
+The animation language reinforces the paper-and-ink aesthetic: deliberate, warm, and never mechanical.
+
+<CardGroup cols={2}>
+  <Card title="Page entrance" icon="arrow-up">
+    600–900ms fade-in combined with a subtle upward lift and blur dissolve. No abrupt cuts.
+  </Card>
+  <Card title="Hover feedback" icon="hand-pointer">
+    140–180ms transitions using position offset, shadow depth change, and brightness shift. No strong spring bounce.
+  </Card>
+  <Card title="Glass / blur layers" icon="layers">
+    Modals and floating panels use 12–18px backdrop blur. Background opacity must not exceed 0.82.
+  </Card>
+  <Card title="Paper texture" icon="image">
+    6–10% visible paper grain or noise overlay. Must not obscure body text.
+  </Card>
+</CardGroup>
+
+**Highlight control**: Page-level radial glows are acceptable when soft and warm-toned. Rainbow gradients and neon glow effects are excluded from the design language.
+
+## Key visual assets
+
+### Scroll strip (PC desktop)
+
+The 56px-wide strip revealed when the map rolls up uses a precise gradient background:
+
+```css
+background: linear-gradient(
+  to right,
+  #ddd1c6 0%,
+  #ede3da 58%,
+  rgba(237, 227, 218, 0.78) 100%
+);
+width: 56px;
+box-shadow: 6px 0 28px rgba(79, 53, 54, 0.16),
+            inset -2px 0 0 rgba(138, 113, 92, 0.18);
+```
+
+Decorative paper grain lines use `rgba(154, 122, 97, 0.16)`. The "展开地图" vertical label defaults to `Ink Muted`; the active arrow uses `Primary`.
+
+### Stamp frame
+
+- **Aspect ratio**: fixed `3:4` or `1:1`
+- **Border**: perforated edge asset (hollow center)
+- **Active state**: `Neutral Dark` (`#634725`) outline plus a soft `Primary` outer glow
+
+### Map pin point
+
+- **Container size**: `48×48` or `64×64`
+- **Content**: Q-style avatar within frame
+- **Active state**: `Primary` (`#c23643`) border + light outer glow
+
+## Implementation constraints
+
+The single source of truth for all tokens is `src/app/globals.css`. Font loading and Tailwind aliases live in `src/app/layout.tsx`. No component may define its own color values outside this system.

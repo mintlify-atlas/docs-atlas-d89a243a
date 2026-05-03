@@ -1,0 +1,388 @@
+---
+title: "Data model: TypeScript interfaces and Zustand state"
+description: "Complete reference for all domain interfaces in types.ts, the Zustand global store shape, and the end-to-end data flow from Feishu Bitable to the frontend."
+---
+
+All production domain types for HNU-TimeLetter are defined in a single file — `src/lib/types.ts` — which acts as the project's single source of truth. The six core interfaces cover every entity that flows through the Feishu sync pipeline into the local JSON files that the frontend consumes at build time. Alongside the static types, a small Zustand store in `src/lib/store.ts` holds the three pieces of interactive UI state that need to be shared across component trees: envelope open status, intro animation readiness, and the full-screen transition flag.
+
+## Data flow overview
+
+The complete path from data entry to rendered page has four stages:
+
+<Steps>
+  <Step title="Feishu Bitable (source)">
+    Operators enter story records, creation board ideas, location coordinates, and contributor credits directly into Feishu multi-dimensional tables. Feishu is the only authoritative data source; nothing is edited in local files by hand.
+  </Step>
+  <Step title="Sync service">
+    `src/lib/sync-service.ts` (and the modular sync pipeline under `src/lib/sync/`) reads the Feishu API, downloads attachments, uploads binaries to Aliyun OSS, writes OSS URLs back to Feishu fields, and serialises the results to local JSON.
+  </Step>
+  <Step title="Local JSON outputs (build-time data)">
+    Four JSON files are written under `src/data/` and `src/config/`. These are committed or persisted on the server and treated as build-time data — they are statically imported by Next.js during `next build`.
+
+    | File | Contents |
+    |---|---|
+    | `src/config/locations.json` | Location coordinates and metadata |
+    | `src/data/content.json` | Stories grouped by location |
+    | `src/data/creation-board.json` | Raw `CreationIdea` records |
+    | `src/data/contributors.json` | Contributor records |
+  </Step>
+  <Step title="Frontend consumption">
+    The home page (`/`) and `Credits` component read `content.json` and `contributors.json`. The creation board (`/creation`) reads `creation-board.json` and groups records by `CardID` into `CreationCard` objects inside `src/components/creation/utils.ts`.
+  </Step>
+</Steps>
+
+<Note>
+Because JSON files are statically imported at build time, syncing new data to the server does **not** immediately update live pages. A `next build` followed by a server restart is required for changes to take effect. See `DataPublishMode` in [Data sync system](/architecture/data-sync) for the full rationale.
+</Note>
+
+## Core interfaces
+
+### Story
+
+Represents a single record in the Feishu stories table. One `Story` belongs to exactly one `LocationPoint` via `locationId`.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface Story {
+      id: string;
+      characterId: string;
+      characterName: string;
+      avatarUrl: string;      // Q-style avatar URL
+      mainImageUrl: string;   // Full-resolution illustration URL
+      content: string;        // Story body text
+      author: string;
+      date: string;           // Format: YYYY.MM.DD
+      locationId: string;     // Foreign key to LocationPoint.id
+      locationName?: string;
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Unique identifier. Auto-generated or mapped from the Feishu record ID.
+    </ResponseField>
+    <ResponseField name="characterId" type="string" required>
+      Character identifier, sourced from the `角色ID` column in Feishu.
+    </ResponseField>
+    <ResponseField name="characterName" type="string" required>
+      Display name of the character, sourced from `角色名`.
+    </ResponseField>
+    <ResponseField name="avatarUrl" type="string" required>
+      URL of the Q-style avatar. The sync service prefers `头像OSS_URL`; falls back to the raw Feishu attachment `头像` field.
+    </ResponseField>
+    <ResponseField name="mainImageUrl" type="string" required>
+      URL of the full-resolution story illustration. Prefers `大图OSS_URL`; falls back to `大图`.
+    </ResponseField>
+    <ResponseField name="content" type="string" required>
+      Story body text, sourced from `故事内容`.
+    </ResponseField>
+    <ResponseField name="author" type="string" required>
+      Submitter or author name, sourced from `投稿人`.
+    </ResponseField>
+    <ResponseField name="date" type="string" required>
+      Date string in `YYYY.MM.DD` format, sourced from `日期`.
+    </ResponseField>
+    <ResponseField name="locationId" type="string" required>
+      Foreign key linking to `LocationPoint.id`, sourced from `地点ID`.
+    </ResponseField>
+    <ResponseField name="locationName" type="string">
+      Optional denormalised location label, populated during aggregation.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+### LocationPoint
+
+A frontend aggregation entity that combines a campus location's spatial coordinates with all the stories associated with it. Not a direct Feishu record — built by the sync writer from `locations` table data and story grouping.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface LocationPoint {
+      id: string;
+      name: string;
+      x: number;          // SVG X coordinate, 0–100 percent
+      y: number;          // SVG Y coordinate, 0–100 percent
+      stories: Story[];   // All stories associated with this location
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Unique location identifier, e.g. `lib-001`. Used as the foreign key in `Story.locationId`.
+    </ResponseField>
+    <ResponseField name="name" type="string" required>
+      Human-readable location label, e.g. `图书馆`.
+    </ResponseField>
+    <ResponseField name="x" type="number" required>
+      Horizontal position on the SVG campus map expressed as a percentage (0–100).
+    </ResponseField>
+    <ResponseField name="y" type="number" required>
+      Vertical position on the SVG campus map expressed as a percentage (0–100).
+    </ResponseField>
+    <ResponseField name="stories" type="Story[]" required>
+      All `Story` records whose `locationId` matches this location's `id`.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+### CreationIdea
+
+A raw record from the Feishu `揭示板` (creation board) table, view `收集结果`. This is the authoritative sync-layer model written to `creation-board.json`.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface CreationIdea {
+      id: string;
+      cardId: string;
+      content: string;
+      author: string;
+      submitter: string;
+      images: string[];
+      createdAt: string;
+      tags: string;
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Record unique identifier, sourced from Feishu `record_id`.
+    </ResponseField>
+    <ResponseField name="cardId" type="string" required>
+      Business display number. Resolution order: `CardID` field → `自动编号` → `record_id`.
+    </ResponseField>
+    <ResponseField name="content" type="string" required>
+      Idea body text, sourced from the `文本` field. In reference-image scenarios this field also carries the back-filled OSS URL.
+    </ResponseField>
+    <ResponseField name="author" type="string" required>
+      Display attribution. Resolution order: `你的昵称` → `提交人`.
+    </ResponseField>
+    <ResponseField name="submitter" type="string" required>
+      Feishu submitter identity, sourced from `提交人`. Retained for admin auditing.
+    </ResponseField>
+    <ResponseField name="images" type="string[]" required>
+      List of attachment image URLs. Attachments are downloaded from Feishu and re-uploaded to Aliyun OSS before being stored here.
+    </ResponseField>
+    <ResponseField name="createdAt" type="string" required>
+      ISO submission timestamp, sourced from `提交时间`.
+    </ResponseField>
+    <ResponseField name="tags" type="string" required>
+      Single capsule-tag value from the multi-choice field. One `CreationIdea` carries at most one tag.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+### CreationEntry
+
+The presentation-layer projection of `CreationIdea` used exclusively by the `/creation` page. Identical to `CreationIdea` but omits the `submitter` field to avoid exposing Feishu identity data to the browser.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface CreationEntry {
+      id: string;
+      cardId: string;
+      author: string;
+      tags: string;       // Single capsule tag value
+      content: string;
+      images: string[];
+      createdAt: string;
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Mapped from `CreationIdea.id`.
+    </ResponseField>
+    <ResponseField name="cardId" type="string" required>
+      Mapped from `CreationIdea.cardId`. Entries sharing the same `cardId` are grouped into a single `CreationCard`.
+    </ResponseField>
+    <ResponseField name="author" type="string" required>
+      Mapped from `CreationIdea.author`.
+    </ResponseField>
+    <ResponseField name="tags" type="string" required>
+      Mapped from `CreationIdea.tags`.
+    </ResponseField>
+    <ResponseField name="content" type="string" required>
+      Mapped from `CreationIdea.content`.
+    </ResponseField>
+    <ResponseField name="images" type="string[]" required>
+      Mapped from `CreationIdea.images`.
+    </ResponseField>
+    <ResponseField name="createdAt" type="string" required>
+      Mapped from `CreationIdea.createdAt`.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+<Note>
+`CreationEntry` is a pure view model. It is never written to disk by the sync service; it is produced at runtime by `src/components/creation/utils.ts` when reading `creation-board.json`.
+</Note>
+
+---
+
+### CreationCard
+
+The top-level display unit in the `/creation` masonry layout. Not a direct Feishu record — it is assembled client-side by grouping all `CreationIdea` records that share the same `CardID` value and projecting them to `CreationEntry` objects.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface CreationCard {
+      id: string;
+      cardId: string;
+      addIdeaUrl: string;
+      entries: CreationEntry[];
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Card unique identifier; set to the `CardID` value.
+    </ResponseField>
+    <ResponseField name="cardId" type="string" required>
+      The shared `CardID` across all entries in this card.
+    </ResponseField>
+    <ResponseField name="addIdeaUrl" type="string" required>
+      URL for the "Add idea" button in the card's top-right corner, linking to the Feishu submission form pre-populated with this `CardID`.
+    </ResponseField>
+    <ResponseField name="entries" type="CreationEntry[]" required>
+      All stacked entries within this card, ordered by submission time.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+<Warning>
+`CardID` duplication across `CreationIdea` records is intentional — multiple submissions can share the same card. Do **not** deduplicate on `cardId` during the sync phase.
+</Warning>
+
+---
+
+### Contributor
+
+A record from the Feishu contributors / credits table, written to `src/data/contributors.json` and consumed by the `Credits` section on the home page.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface Contributor {
+      id: string;
+      name: string;
+      role?: string;
+      message?: string;
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="id" type="string" required>
+      Unique identifier, sourced from Feishu `record_id`.
+    </ResponseField>
+    <ResponseField name="name" type="string" required>
+      Contributor's display name, sourced from `姓名`.
+    </ResponseField>
+    <ResponseField name="role" type="string">
+      Position or role group (e.g. `设计`, `开发`). Sourced from `职位` or `角色` using high-compatibility field extraction.
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Personal message or dedication. Sourced from `留言`, `寄语`, or `感言`.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+### FeishuRecord and FeishuResponse
+
+Low-level types used only by the sync scripts to parse raw Feishu Open API responses. Application code should never handle these types directly.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    // src/lib/types.ts
+    export interface FeishuRecord {
+      record_id: string;
+      fields: Record<string, unknown>;
+    }
+
+    export interface FeishuResponse {
+      code: number;
+      msg: string;
+      data: {
+        items: FeishuRecord[];
+        has_more: boolean;
+        page_token?: string;
+      };
+    }
+    ```
+  </Tab>
+  <Tab title="Fields">
+    <ResponseField name="record_id" type="string" required>
+      Feishu-assigned record identifier. Maps to `id` in higher-level types.
+    </ResponseField>
+    <ResponseField name="fields" type="Record<string, unknown>" required>
+      Raw field map keyed by Feishu column name. Field values are untyped at this layer; field readers in `src/lib/sync/shared/field-reader.ts` perform typed extraction.
+    </ResponseField>
+    <ResponseField name="code" type="number" required>
+      Feishu API response code. `0` indicates success.
+    </ResponseField>
+    <ResponseField name="msg" type="string" required>
+      Human-readable status message from the API.
+    </ResponseField>
+    <ResponseField name="has_more" type="boolean" required>
+      Pagination flag. When `true`, the caller must issue another request with `page_token`.
+    </ResponseField>
+    <ResponseField name="page_token" type="string">
+      Cursor for the next page of results. Present only when `has_more` is `true`.
+    </ResponseField>
+  </Tab>
+</Tabs>
+
+---
+
+## Zustand global store
+
+The global UI state is minimal and intentionally kept separate from data-fetching concerns. The store is defined in `src/lib/store.ts` and exported as `useAppStore`.
+
+```typescript
+// src/lib/store.ts
+interface AppState {
+  isEnvelopeOpened: boolean;
+  setEnvelopeOpened: (opened: boolean) => void;
+
+  isTransitioning: boolean;
+  setTransitioning: (transitioning: boolean) => void;
+
+  isIntroReady: boolean;
+  setIntroReady: (ready: boolean) => void;
+}
+```
+
+<ResponseField name="isEnvelopeOpened" type="boolean">
+  Whether the envelope opening animation has been triggered by the user. When `true`, the map experience is revealed and Lenis smooth scroll is activated on desktop.
+</ResponseField>
+
+<ResponseField name="isTransitioning" type="boolean">
+  Whether the full-screen transition overlay (letter → map) is currently active. Used to prevent the footer from flashing through during the animation.
+</ResponseField>
+
+<ResponseField name="isIntroReady" type="boolean">
+  Whether the opening intro animation (ribbon reveal + envelope fall) has finished playing. While `false`, vertical page scroll is locked to prevent users from scrolling past the intro sequence.
+</ResponseField>
+
+<Tip>
+Map-specific state — selected location ID and current story index — is managed locally within the interactive map components rather than in the global store, keeping the global store surface small.
+</Tip>

@@ -1,0 +1,87 @@
+{
+  "projectType": "frontend",
+  "projectName": "与她的海大时光笺 (HNU-TimeLetter)",
+  "projectDescription": "An interactive visual storytelling website for Hainan University campus, combining galgame-style character illustrations with real campus locations through an envelope-opening ritual and interactive map experience.",
+  "theme": "willow",
+  "primaryColor": "#c23643",
+  "lightColor": "#ece9e4",
+  "darkColor": "#342628",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "environment-setup"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/tech-stack",
+              "architecture/data-model",
+              "architecture/data-sync"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/envelope-intro",
+              "features/interactive-map",
+              "features/mobile-experience",
+              "features/creation-board"
+            ]
+          },
+          {
+            "group": "Design System",
+            "pages": [
+              "design/visual-spec",
+              "design/interaction-design"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "ops/feishu-cms",
+              "ops/admin-panel",
+              "ops/deployment"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Envelope-opening ceremony animation (fire seal crack, cover flip, letter reveal)",
+    "Interactive campus map with story pins (PC desktop experience)",
+    "Horizontal scroll/unroll map-to-story-board transition",
+    "Mobile waterfall story feed with shared-element transitions",
+    "Creation board (/creation) - community-contributed ideas in masonry layout",
+    "Feishu (Lark) Bitable CMS integration for content management",
+    "Aliyun OSS image storage with MD5 deduplication",
+    "Admin panel with sync job orchestration, scheduler, and publish pipeline",
+    "Framer Motion animations with Lenis smooth scrolling",
+    "Dual-device strategy: PC (map scroll) vs Mobile (stamp album)"
+  ],
+  "publicApiSurface": [
+    "Story interface - id, characterId, characterName, avatarUrl, mainImageUrl, content, author, date, locationId",
+    "LocationPoint interface - id, name, x, y, stories[]",
+    "CreationIdea interface - id, cardId, content, author, submitter, images[], createdAt, tags",
+    "CreationCard interface - id, cardId, addIdeaUrl, entries[]",
+    "Contributor interface - id, name, role, message",
+    "GET /api/admin/sync/config - read sync configuration and runtime summary",
+    "PATCH /api/admin/sync/config - update scheduler configuration",
+    "POST /api/admin/sync/jobs - create a sync job (sync-data or sync-data-and-publish)",
+    "GET /api/admin/sync/jobs - list recent sync jobs",
+    "GET /api/admin/sync/jobs/:jobId - get single job details",
+    "POST /api/admin/login - admin authentication",
+    "npm run sync - CLI entry for Feishu data synchronization",
+    "npm run build - production build (includes sync)",
+    "SyncJobKind: sync-data | sync-data-and-publish",
+    "SyncTableKey: locations | stories | creation_board"
+  ]
+}

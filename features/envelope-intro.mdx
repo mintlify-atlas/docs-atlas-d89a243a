@@ -1,0 +1,182 @@
+---
+title: "Envelope opening ceremony: the site entry ritual"
+description: "How the wax-seal click, framer-motion animation sequence, Zustand state machine, and Lenis smooth scroll combine to create the site's immersive opening."
+---
+
+When a visitor first lands on HNU-TimeLetter, they are greeted not by a dashboard or a hero banner, but by a full-screen envelope sitting in silence at the centre-right of the viewport. The envelope is the gate. Nothing in the main experience is accessible until the user clicks the wax seal, watches the letter emerge, and lets the full-screen transition carry them through to the map. This ceremony — entrance animation, opening sequence, page-level state machine, and smooth-scroll infrastructure — is implemented in `src/components/shared/EnvelopeIntro.tsx` and orchestrated by the Zustand store in `src/lib/store.ts`.
+
+## Entry animation sequence
+
+Before the user can interact with the envelope, two entrance animations play simultaneously to establish the visual language of the page.
+
+<Steps>
+
+### Red ribbon draws downward
+
+A 100 px-wide diagonal guide stripe (`clip-path` animation) sweeps from the top of the viewport toward the bottom-left. The sweep uses a double `requestAnimationFrame` trigger, runs for `1000 ms`, and uses `cubic-bezier(0.16, 1, 0.3, 1)` — the same curve that governs the scroll-section guide line. The stripe is rendered as an SVG `<path>` inside a masked Top Layer overlay; the mask reveals a colour-swapped version of the background so the stripe reads as a painted edge rather than a floating element.
+
+### Envelope falls from above
+
+Immediately after the ribbon sweep begins, the envelope drops in from `y: -120vh` using a Spring animation (`stiffness: 30`, `damping: 12`, `mass: 1.5`). Once it settles, it enters a continuous breathing float (`y: [0, -8, 0]`, 5.5 s loop). The wax seal is fixed at `-5deg` rotation and does not respond to hover.
+
+### Title fades in
+
+The vertical title "与她的海大时光笺" fades in after the ribbon animation completes. When the user triggers the opening, the title simultaneously drifts upward and blurs out.
+
+### `isIntroReady` released
+
+After the envelope settles, `setIntroReady(true)` is called. This unblocks Lenis smooth scroll on desktop, mounts the custom scrollbar, and allows the user to scroll down to the information pages.
+
+</Steps>
+
+## Opening animation sequence
+
+Clicking the wax seal starts the `opening` phase and kicks off a choreographed async chain defined in `handleOpen` (`EnvelopeIntro.tsx:370`).
+
+<Steps>
+
+### Wax seal shatters
+
+`setIsShattered(true)` fires immediately. The `WaxSealShards` component renders 8 `clip-path` fragments of the seal image; each shard flies radially outward, shrinks, and fades over `650 ms` with staggered delays.
+
+### Flap rotates open + letter rises
+
+`openControls.start('open')` triggers two `framer-motion` variants in the same call: the envelope flap rotates `180deg` on the X axis (`duration: 0.6s`), and the letter panel slides upward by `150px` with a spring bounce. The flap's `zIndex` drops from `30` → `0` at `0.15s` delay, just past the `90deg` midpoint, so the flap is never incorrectly painted above the rising letter.
+
+### Shell drops away
+
+The envelope body (back, side flaps, wax button) falls to `y: 120vh` with a slight `4deg` rotate over `700 ms`.
+
+### Letter centres in viewport
+
+The letter panel (`inset-4` inside the envelope) translates from its original position at `(75vw, 70vh)` to the exact viewport centre using a pixel-accurate offset calculated by `calcLetterCenterOffset()`.
+
+### `isTransitioning` overlay opens
+
+`setTransitioning(true)` is called. The `TransitionOverlay` component renders a full-screen mask that covers the footer and all scroll content, preventing any bleed-through during the next step.
+
+### Letter scales to fill screen
+
+`openControls.start({ scale: targetScale })` expands the letter until it covers the entire viewport. The target scale is computed by `calcLetterScale()`, which takes `Math.max(vw / letterWidth, vh / letterHeight) * 1.2`.
+
+### Router pushes to `/map`
+
+`router.push('/map')` hands off to Next.js. The transition overlay remains until the new route is fully painted.
+
+</Steps>
+
+## Zustand state machine
+
+The three boolean flags in `src/lib/store.ts` govern every conditional render and side-effect across the homepage.
+
+```typescript
+// src/lib/store.ts
+interface AppState {
+  isEnvelopeOpened: boolean;   // true after opening animation completes
+  isTransitioning: boolean;    // true during the letter-scale → route-push window
+  isIntroReady: boolean;       // true after entry animation; unblocks Lenis + scrollbar
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="isIntroReady: false" icon="lock">
+    Scroll is locked via `intro-scroll-locked` CSS class on `<html>` and `<body>`. Lenis is not instantiated. The custom scrollbar is not mounted.
+  </Card>
+  <Card title="isIntroReady: true" icon="unlock">
+    Lenis is created with `duration: 1.2`, exponential easing, and `wheelMultiplier: 1`. The custom scrollbar syncs to `lenis.on('scroll')`. Both are torn down when `isTransitioning` becomes true.
+  </Card>
+  <Card title="isTransitioning: true" icon="spinner">
+    The full-screen `TransitionOverlay` is visible. Lenis and the scrollbar are suspended. The footer is hidden behind the overlay so it cannot bleed through the letter scale animation.
+  </Card>
+  <Card title="isEnvelopeOpened: true" icon="envelope-open">
+    Set by the store after `router.push('/map')`. At this point the homepage component tree is unmounted; the flag persists in the store for the new route to read if needed.
+  </Card>
+</CardGroup>
+
+### State transition diagram
+
+```
+mount
+  └─► setIntroReady(false)          ← scroll locked
+      setEnvelopeOpened(false)
+
+entry animations complete
+  └─► setIntroReady(true)           ← Lenis + scrollbar active
+
+user clicks wax seal
+  └─► phase = 'opening'             ← scroll re-locked during animation
+
+letter reaches viewport centre
+  └─► setTransitioning(true)        ← overlay covers footer
+
+letter fills screen
+  └─► router.push('/map')
+      setEnvelopeOpened(true)
+```
+
+## Scroll-down pages (pre-open state)
+
+While the envelope is in its idle state, the user can scroll down past it to a set of informational sections rendered by `ScrollSections` and the `Footer`.
+
+<CardGroup cols={2}>
+  <Card title="About Project" icon="info">
+    Full-screen (`100vh`), warm paper background. Explains the AIGC collaborative campus galgame concept.
+  </Card>
+  <Card title="About Us" icon="users">
+    Full-screen, two-column layout. Left: team description. Right: 7 member avatars with role labels.
+  </Card>
+  <Card title="Credits" icon="star">
+    Full-screen, right-aligned. Three rows of auto-scrolling contributor nicknames (marquee style, varying speed and direction per row).
+  </Card>
+  <Card title="Footer" icon="link">
+    Fixed to the viewport bottom (`position: fixed`). Revealed by a parallax scroll effect as the spacer element in the document flow scrolls away. Red background (`#C23643`) with 4 link cards and the oversized HIMEMATSU logo.
+  </Card>
+</CardGroup>
+
+### Red guide line
+
+A continuous SVG `<path>` (`stroke-width: 100px`, `#c23643`, rounded caps) traces a multi-segment path across the About Project → About Us → Credits sections. It is rendered by `src/components/shared/GuideLine.tsx`.
+
+<Note>
+The guide line uses a non-reversible y-aware progress mapping. Scrolling back up does **not** retract the drawn stroke — progress is clamped to `Math.max(cachedMaxProgress, currentProgress)`. The three-anchor strategy (bottom of viewport → 60% of viewport → bottom of viewport) keeps the stroke tip visible in the reading area throughout the scroll.
+</Note>
+
+### Lenis configuration
+
+```typescript
+// src/lib/useVirtualScroll.ts (applied on desktop, envelope-idle state only)
+const lenis = new Lenis({
+  duration: 1.2,
+  easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), // exponential
+  smoothWheel: true,
+  wheelMultiplier: 1,
+  touchMultiplier: 2,
+});
+```
+
+<Warning>
+Lenis is only active on **desktop** (`> 768px`) and only while `isIntroReady && !isTransitioning`. Mobile uses native scroll throughout. The custom scrollbar (`src/components/shared/CustomScrollbar.tsx`) is mounted under the same conditions and is driven by `lenis.on('scroll')`, falling back to `window.scroll` when no Lenis instance is present.
+</Warning>
+
+## Responsive split
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Desktop `> 768px` | Envelope intro plays in full. Lenis smooth scroll active. Custom scrollbar mounted. After opening → `/map` shows `InteractiveMap`. |
+| Mobile `≤ 768px` | Envelope intro plays (native scroll). No Lenis. No custom scrollbar. After opening → `/map` shows `MobileExperience`. |
+
+The responsive branch is evaluated by the `useIsMobile` hook (768 px breakpoint) inside `src/app/page.tsx` and `src/app/map/page.tsx`.
+
+## Global navigation bar
+
+The vertical pill navigation bar (`src/components/shared/GlobalNav.tsx`) is fixed at the top-right of every page (`position: fixed`, high `z-index`). It contains three items rendered with `writing-mode: vertical-rl`:
+
+| Label | Route |
+|-------|-------|
+| 主页 | `/` |
+| 地图 | `/map` |
+| 公示板 | `/creation` |
+
+The active item is highlighted with a solid `#c23643` inner pill (a "capsule inside a capsule" effect). Transitions between active items use Framer Motion layout animation so the inner capsule slides smoothly rather than jumping.
+
+On the homepage at `scrollY === 0`, a `~30vh × ~7vw` red rectangle extends downward from the bottom of the nav capsule, aligning with the left ribbon. This decoration fades out as the user scrolls down.

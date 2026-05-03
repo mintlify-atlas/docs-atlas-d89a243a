@@ -1,0 +1,148 @@
+---
+title: "Environment setup and development workflow"
+description: "Reference for Node.js requirements, all environment variables by service, npm scripts, branch strategy, directory ownership, and Playwright E2E testing setup."
+---
+
+This page is the authoritative reference for setting up a local development environment and understanding the team workflow conventions. It covers everything from the minimum Node.js version and environment variable groups through to branch naming, directory ownership per developer, and running the Playwright end-to-end test suite. Keep it open alongside the [quickstart guide](/quickstart) when provisioning a new machine.
+
+## Node.js version requirement
+
+The project requires **Node.js >= 20**. This is enforced because the sync script (`src/scripts/sync-feishu.ts`) runs via `tsx` and relies on modern Node.js APIs. You can manage Node.js versions with [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm).
+
+```bash
+node --version   # must print v20.x.x or higher
+npm install      # install all dependencies after confirming version
+```
+
+## Environment variables
+
+All runtime secrets are loaded from `.env.local` (ignored by git). Copy `.env.example` to `.env.local` as your starting point. Variables are grouped below by the service they configure.
+
+### Feishu base configuration
+
+These variables authenticate the app against the Feishu (Lark) open platform and identify the Bitable table that holds homepage story records.
+
+| Variable | Required | Description |
+|---|---|---|
+| `FEISHU_APP_ID` | Yes | App ID from the Feishu developer console (format: `cli_...`) |
+| `FEISHU_APP_SECRET` | Yes | App secret paired with `FEISHU_APP_ID` |
+| `FEISHU_APP_TOKEN` | Yes | Bitable app token extracted from the table URL |
+| `FEISHU_TABLE_ID` | Yes | ID of the story records table within the Bitable app |
+| `FEISHU_VIEW_ID` | Yes | ID of the specific view to read (controls which rows are synced) |
+
+To authorize the app to read your table, go to the Bitable table, click **...** → **More** → **Add application**, and add the app you created in the Feishu developer console. Without this step the sync script returns a 403 error.
+
+### Feishu creation board
+
+These variables point to the separate Bitable table for the `/creation` community board. Both are optional — if unset the sync script falls back to built-in default values.
+
+| Variable | Required | Description |
+|---|---|---|
+| `FEISHU_CREATION_TABLE_ID` | No | Table ID for the creation board (defaults to built-in value) |
+| `FEISHU_CREATION_VIEW_ID` | No | View ID for the creation board |
+
+### Feishu contributors table
+
+| Variable | Required | Description |
+|---|---|---|
+| `FEISHU_CONTRIBUTORS_TABLE_ID` | No | Table ID for the credits/contributors list (default: `tbl1aSvNwBjlVJzd`) |
+
+### Aliyun OSS
+
+The sync script uploads all character images and story images to Aliyun OSS and writes the resulting permanent URLs back to Feishu. The bucket must have **public-read** ACL.
+
+| Variable | Required | Description |
+|---|---|---|
+| `ALIYUN_OSS_REGION` | Yes | OSS region endpoint, e.g. `oss-cn-guangzhou` |
+| `ALIYUN_OSS_BUCKET` | Yes | Bucket name in the specified region |
+| `ALIYUN_OSS_ACCESS_KEY_ID` | Yes | Aliyun RAM user Access Key ID |
+| `ALIYUN_OSS_ACCESS_KEY_SECRET` | Yes | Aliyun RAM user Access Key Secret |
+
+<Tip>
+  The sync script deduplicates uploads by MD5 hash — uploading the same image file twice stores only one copy in OSS. If you modify an image's content, the changed MD5 causes it to be treated as a new file.
+</Tip>
+
+### Admin authentication
+
+| Variable | Required | Description |
+|---|---|---|
+| `ADMIN_PASSWORD` | Recommended | Password for the `/admin` back-office login. Falls back to `admin` if unset. |
+
+<Warning>
+  The `admin` fallback password must never be used in production or any publicly accessible environment. Set `ADMIN_PASSWORD` to a strong secret before deploying.
+</Warning>
+
+## npm scripts reference
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `next dev` | Start the Next.js development server with Turbopack on port 3000 |
+| `build` | `next build` | Production build only — does **not** run sync; use `build:with-sync` for a full sync + build |
+| `build:with-sync` | `npm run sync && npm run build` | Sync data from Feishu then build for production |
+| `sync` | `tsx src/scripts/sync-feishu.ts` | Pull data from Feishu, upload images to OSS, write JSON to `src/data/` |
+| `lint` | `eslint` | Run ESLint across the project |
+| `test:e2e` | `playwright test` | Run Playwright E2E tests in headless mode |
+| `test:e2e:headed` | `playwright test --headed` | Run Playwright E2E tests with a visible browser window |
+| `test:e2e:ui` | `playwright test --ui` | Open the Playwright interactive UI debugger |
+| `test:e2e:install` | `playwright install chromium` | Download the Chromium browser for Playwright (required on first use) |
+
+<Note>
+  Vercel's build command should be set to `npm run build:with-sync` so that the latest Feishu data is always fetched before each deployment build.
+</Note>
+
+## Branch strategy
+
+The project uses a four-branch model with strict rules about what merges where:
+
+| Branch | Purpose | Direct push |
+|---|---|---|
+| `main` | Production branch — auto-deployed by Vercel | Not allowed; merge via PR only |
+| `dev` | Integration branch — all feature branches merge here for testing | Allowed for integration work |
+| `feat/infra` | Dev A working branch (architecture, data pipeline, back-office) | Dev A only |
+| `feat/desktop` | Dev B working branch (desktop map, scroll board) | Dev B only |
+| `feat/mobile` | Dev C working branch (mobile waterfall, detail page) | Dev C only |
+
+The promotion path is: feature branch → `dev` (integration and QA) → `main` (production via PR).
+
+## Directory ownership
+
+To minimize merge conflicts across three parallel workstreams, each developer owns specific directories and should not modify files outside their scope without coordination:
+
+| Directory | Owner | Contents |
+|---|---|---|
+| `src/app/` | Dev A | Global routing, layouts, API routes, admin back-office |
+| `src/components/shared/` | Dev A | Shared components: EnvelopeIntro, GuideLine, CustomScrollbar |
+| `src/lib/` | Dev A | Type definitions (`types.ts`), sync service, Zustand store, utilities |
+| `src/components/desktop/` | Dev B | Desktop-specific map and story board components |
+| `src/components/mobile/` | Dev C | Mobile waterfall layout and detail page transition components |
+
+The `agents/` and `.opencode/agents/` directories are collaboration asset directories excluded from the TypeScript compilation boundary via `tsconfig.json`. Do not place agent or skill files inside `src/`.
+
+## Playwright E2E testing
+
+The project includes end-to-end tests in `tests/e2e/` using Playwright. The default Playwright configuration automatically starts the local development server at `http://127.0.0.1:3000` before running tests.
+
+### First-time setup
+
+Install the Chromium browser binary before running tests for the first time:
+
+```bash
+npm run test:e2e:install
+```
+
+### Running tests
+
+```bash
+# Headless mode (CI-friendly)
+npm run test:e2e
+
+# With a visible browser window (useful for debugging)
+npm run test:e2e:headed
+
+# Interactive Playwright UI (step-through debugging)
+npm run test:e2e:ui
+```
+
+<Tip>
+  Debug output and screenshots from Playwright runs are written to `.playwright-mcp/` in the repository root. This directory is git-ignored and should not be committed.
+</Tip>

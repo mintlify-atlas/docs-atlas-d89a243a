@@ -1,0 +1,118 @@
+---
+title: "Admin panel: sync control, scheduling, and monitoring"
+description: "Use the HNU-TimeLetter admin panel at /admin to trigger syncs, configure cron schedules, monitor job status, and browse content data."
+---
+
+The admin panel is a lightweight operations dashboard built into the Next.js app at `/admin`. It gives operators full control over the Feishu sync pipeline without touching the command line — trigger a one-off sync, configure automated schedules, inspect individual job results, and browse the content data that was last published. All state is persisted to local JSON files; no external database is required.
+
+## Accessing the admin panel
+
+Navigate to `/admin` on your deployment (e.g., `http://localhost:3000/admin` in development). You will be redirected to `/admin/login` if no valid session cookie exists.
+
+<Warning>
+  The login password is read from the `ADMIN_PASSWORD` environment variable. If this variable is not set, the system falls back to the default password `admin`. **You must set `ADMIN_PASSWORD` to a strong secret before going live.**
+</Warning>
+
+After a successful login the panel sets an HttpOnly session cookie and redirects to `/admin/dashboard`.
+
+## Dashboard features
+
+<CardGroup cols={2}>
+  <Card title="Sync status card" icon="rotate">
+    Shows the last sync time, current status (idle / running / success / failed), and the next scheduled run time based on the configured cron expression.
+  </Card>
+  <Card title="Manual sync trigger" icon="play">
+    Two buttons let you start a sync on demand: **Sync data** updates JSON files only; **Sync and publish** additionally rebuilds the site so changes go live immediately.
+  </Card>
+  <Card title="Job list" icon="list">
+    Displays recent sync jobs with color-coded status indicators. Click any job to expand per-step details, record counts, warnings, and publish status.
+  </Card>
+  <Card title="Content viewer" icon="table">
+    Browses `content.json` in a searchable table. Expand any location to see its stories filtered by character or author.
+  </Card>
+</CardGroup>
+
+## Sync operations
+
+The panel exposes two distinct sync actions because content is **build-time data** — pulling fresh records from Feishu does not update the live site until the Next.js app is rebuilt.
+
+| Button | Script alias | What it does |
+|---|---|---|
+| Sync data | `sync-data` | Runs `npm run sync`, writes JSON files. Live site is **not** updated. |
+| Sync and publish | `sync-data-and-publish` | Sync + build + restart. Live site reflects the new data. |
+
+<Note>
+  Use **Sync data** when you want to preview or validate incoming content before publishing. Use **Sync and publish** when you are ready to push changes to visitors.
+</Note>
+
+## Scheduler configuration
+
+The scheduler runs inside the Node.js process using `node-schedule`. Configuration is stored in `src/config/admin.json` and can be edited live from the dashboard without restarting the server.
+
+<Steps>
+  <Step title="Enable or disable auto-sync">
+    Toggle the **Auto-sync** switch on the dashboard. The scheduler respects the `enabled` flag immediately.
+  </Step>
+  <Step title="Set the cron expression">
+    The default expression `0 0 * * *` triggers a sync at midnight every day. Edit the field and save to apply a new schedule instantly.
+
+    ```json
+    {
+      "sync": {
+        "enabled": true,
+        "cron": "0 0 * * *"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Configure default tables">
+    Choose which tables are included in every scheduled run: **locations**, **stories**, **creation_board**. Individual tables can be toggled without changing the cron schedule.
+  </Step>
+</Steps>
+
+## Sync job details
+
+Each job entry in the job list exposes the following fields:
+
+| Field | Values / description |
+|---|---|
+| Job ID | Unique identifier for the run |
+| Status | `queued` / `running` / `success` / `partial_success` / `failed` |
+| Per-step status | Each sync step reports `totalRecords`, `successRecords`, `failedRecords` |
+| Warnings | Non-fatal issues (e.g., a record missing an image) |
+| Errors | Fatal issues that caused a step to fail |
+| Publish status | `not_required` / `pending` / `building` / `published` / `publish_failed` |
+
+A `partial_success` status means at least one record failed while others succeeded. Review the warnings and errors list to identify which records need attention.
+
+## Selective table sync
+
+When triggering a manual sync you can choose exactly which tables to pull:
+
+<Steps>
+  <Step title="Select tables">
+    Check any combination of **locations**, **stories**, and **creation_board**.
+  </Step>
+  <Step title="Choose dependency mode">
+    | Mode | Behavior |
+    |---|---|
+    | `read_local` (default) | Uses already-synced data for dependencies; fastest |
+    | `run_dependencies` | Syncs dependency tables first before the selected ones |
+    | `strict` | Fails if any dependency has not been synced in the current run |
+  </Step>
+  <Step title="Toggle asset downloads">
+    The **Include assets** option controls whether attachments are downloaded from Feishu and uploaded to OSS. Disable it for a metadata-only refresh when images have not changed.
+  </Step>
+</Steps>
+
+## Content viewer
+
+The content viewer reads `src/data/content.json` directly and renders it in a paginated table.
+
+- **Locations list**: shows location ID, display name, and map coordinates.
+- **Story details**: expand any location row to see its associated stories, including character name, author, and a content preview.
+- **Search and filter**: a search box filters stories by character name or location name in real time.
+
+<Tip>
+  The content viewer reflects the last completed sync, not the live Feishu table. If you need to verify the latest Feishu data, run a sync first.
+</Tip>

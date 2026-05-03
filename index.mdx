@@ -1,133 +1,65 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "HNU-TimeLetter: Campus Visual Storytelling"
+description: "Interactive site blending galgame characters with Hainan University campus locations. Built with Next.js, Framer Motion, and Feishu Bitable CMS."
 ---
 
-## Setting up
+与她的海大时光笺 (HNU-TimeLetter) is an interactive visual storytelling website that brings together galgame-style character illustrations and real Hainan University campus locations. Users open a ceremonial envelope to enter an immersive experience — browsing an interactive campus map on desktop or a stamp-album story feed on mobile — uncovering "decisive moments" and the stories behind them.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what HNU-TimeLetter is, its key features, and how the project is structured.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the site running locally in minutes with Feishu CMS data.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Architecture" icon="sitemap" href="/architecture/tech-stack">
+    Explore the tech stack, data model, and sync system design.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Features" icon="map" href="/features/envelope-intro">
+    Deep-dive into the envelope intro, interactive map, and creation board.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you'll find here
 
-Everything you need to create world-class documentation.
+<CardGroup cols={3}>
+  <Card title="Get Started" icon="play" href="/quickstart">
+    Installation, environment setup, and first data sync
+  </Card>
+  <Card title="Architecture" icon="layer-group" href="/architecture/data-model">
+    Data types, Feishu sync pipeline, and state management
+  </Card>
+  <Card title="Design System" icon="palette" href="/design/visual-spec">
+    Color tokens, typography, and animation principles
+  </Card>
+  <Card title="Desktop Experience" icon="desktop" href="/features/interactive-map">
+    Interactive map, scroll strip, and story board
+  </Card>
+  <Card title="Mobile Experience" icon="mobile" href="/features/mobile-experience">
+    Story waterfall feed and immersive detail modal
+  </Card>
+  <Card title="Operations" icon="gear" href="/ops/feishu-cms">
+    Feishu CMS setup, admin panel, and Vercel deployment
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## How it works
 
-## Make your content agent ready
+<Steps>
+  <Step title="Configure Feishu CMS">
+    Set up your Feishu Bitable app credentials and Aliyun OSS bucket in `.env.local`.
+  </Step>
+  <Step title="Sync data">
+    Run `npm run sync` to pull stories, locations, and community creations from Feishu into local JSON files.
+  </Step>
+  <Step title="Start the dev server">
+    Run `npm run dev` and open `http://localhost:3000` to explore the envelope-opening ceremony and interactive campus map.
+  </Step>
+  <Step title="Deploy to Vercel">
+    Push to your `main` branch. Set the Vercel build command to `npm run publish` so it syncs from Feishu and builds in one step.
+  </Step>
+</Steps>
 
-Make your docs work for humans and AI agents alike.
-
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  The project requires a live Feishu Bitable connection — there is no bundled mock data. Make sure your credentials are configured before running `npm run sync`.
+</Note>

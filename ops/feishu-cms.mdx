@@ -1,0 +1,158 @@
+---
+title: "Feishu Bitable CMS setup and data synchronization"
+description: "Configure Feishu Bitable as the CMS, set up Aliyun OSS for image storage, and run the sync pipeline to publish stories and creation board entries."
+---
+
+HNU-TimeLetter uses Feishu Bitable (多维表格) as its headless CMS. Editors upload story images directly in Feishu; the sync pipeline downloads the attachments, deduplicates them by MD5, uploads them to Aliyun OSS, and writes the permanent URLs back into the table. The result is a set of JSON files consumed at build time — no database required.
+
+## Creating the Feishu app
+
+<Steps>
+  <Step title="Create an enterprise self-built app">
+    Open the [Feishu developer console](https://open.feishu.cn/), navigate to **My Apps**, and create a new **enterprise self-built app** (企业自建应用).
+  </Step>
+  <Step title="Grant required permissions">
+    Under **Permissions & Scopes**, enable the following:
+
+    | Permission | Purpose |
+    |---|---|
+    | `bitable:app:readonly` | Read records and attachments |
+    | `bitable:app` | Write back OSS URLs to table fields |
+  </Step>
+  <Step title="Add the app to your Bitable">
+    Open your Bitable document, click **...** in the top-right corner → **More** → **Add Application**, and select the app you just created.
+
+    <Warning>
+      Skipping this step causes a 403 error on every API call, even with the correct credentials.
+    </Warning>
+  </Step>
+</Steps>
+
+## Story table field requirements
+
+The main story table must include four specific fields. Run the initialization scripts below if the fields do not exist yet.
+
+**Required fields:**
+
+| Field name | Type | Spec |
+|---|---|---|
+| 头像 | Attachment | JPG/PNG, 500 × 500 px recommended |
+| 大图 | Attachment | JPG/PNG, 1920 × 1080 px or larger |
+| 头像OSS_URL | Text | Written back automatically by sync |
+| 大图OSS_URL | Text | Written back automatically by sync |
+
+**Initialization scripts** (run once, in order):
+
+```bash
+# 1. Initialize the OSS file record table (stores file metadata)
+npx tsx src/scripts/init-oss-table.ts
+
+# 2. Create attachment fields (头像, 大图)
+npx tsx src/scripts/add-attachment-fields.ts
+
+# 3. Create OSS URL writeback fields
+npx tsx src/scripts/add-oss-fields.ts
+```
+
+## Environment variables
+
+Copy `.env.example` to `.env.local` and fill in all values before running any script.
+
+```bash
+cp .env.example .env.local
+```
+
+```env
+# Feishu — homepage story table
+FEISHU_APP_ID=cli_...
+FEISHU_APP_SECRET=...
+FEISHU_APP_TOKEN=...
+FEISHU_TABLE_ID=...
+FEISHU_VIEW_ID=...
+
+# Feishu — community creation board (optional)
+FEISHU_CREATION_TABLE_ID=...
+FEISHU_CREATION_VIEW_ID=...
+
+# Feishu — contributors acknowledgement table
+FEISHU_CONTRIBUTORS_TABLE_ID=...
+
+# Aliyun OSS
+ALIYUN_OSS_REGION=oss-cn-guangzhou
+ALIYUN_OSS_BUCKET=...
+ALIYUN_OSS_ACCESS_KEY_ID=...
+ALIYUN_OSS_ACCESS_KEY_SECRET=...
+
+# Admin panel authentication
+ADMIN_PASSWORD=change-me
+```
+
+<Warning>
+  Change `ADMIN_PASSWORD` before deploying to production. If the variable is unset, the panel falls back to the default password `admin`.
+</Warning>
+
+## Aliyun OSS setup
+
+<Steps>
+  <Step title="Create a bucket">
+    Create a new OSS bucket in the **oss-cn-guangzhou** region (or whichever region matches `ALIYUN_OSS_REGION`).
+  </Step>
+  <Step title="Set bucket permissions to Public Read">
+    Under **Bucket ACL**, select **Public Read**. This allows the frontend to load images directly from OSS URLs without signed requests.
+  </Step>
+  <Step title="Configure CORS">
+    Add a CORS rule with **Allowed Origin** set to `*`. This is required for browser-side image loading during local development.
+  </Step>
+</Steps>
+
+## Sync workflow
+
+There are two ways to get images into OSS. The first is recommended for day-to-day content editing.
+
+<Tabs>
+  <Tab title="Via Feishu attachments (recommended)">
+    <Steps>
+      <Step title="Upload images in Feishu">
+        In the story table, attach images to the **头像** and **大图** fields for each record.
+      </Step>
+      <Step title="Run the sync command">
+        ```bash
+        npm run sync
+        ```
+      </Step>
+      <Step title="What happens automatically">
+        The sync script:
+        1. Downloads each attachment from Feishu
+        2. Computes the file's MD5 hash
+        3. Uploads the file to OSS (skipped if hash already exists)
+        4. Writes the permanent OSS URL back to the `OSS_URL` field in Feishu
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Manual OSS upload">
+    Upload files directly to your OSS bucket using the Aliyun console or `ossutil`, then paste the public URL into the corresponding `头像OSS_URL` or `大图OSS_URL` field in Feishu. The sync script detects a populated URL field and skips re-uploading that record.
+  </Tab>
+</Tabs>
+
+## MD5 deduplication
+
+Every file is stored in OSS under its MD5 hash as the filename (e.g., `a1b2c3d4ef56....png`). If the same image is uploaded to multiple Feishu records, only one copy is stored in OSS.
+
+<Tip>
+  If you update an image's content, its MD5 changes and the script treats it as a new file. The old file remains in OSS but is no longer referenced by any record.
+</Tip>
+
+## What sync produces
+
+After a successful `npm run sync`, the following files are written or updated:
+
+| Output file | Contents |
+|---|---|
+| `src/data/content.json` | Stories displayed on the homepage map |
+| `src/data/creation-board.json` | Community creation board entries |
+| `src/data/contributors.json` | Acknowledgements / credits list |
+| `src/config/locations.json` | Map pin coordinates and metadata |
+
+<Note>
+  These files are **build-time data**. After syncing, you must run a production build (or trigger "Sync and publish" in the admin panel) for the changes to appear on the live site.
+</Note>

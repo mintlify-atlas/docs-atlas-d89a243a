@@ -1,0 +1,96 @@
+---
+title: "HNU-TimeLetter: Campus Visual Storytelling Site"
+description: "HNU-TimeLetter blends galgame characters with Hainan University campus locations in an interactive visual narrative powered by Feishu Bitable and Aliyun OSS."
+---
+
+HNU-TimeLetter (与她的海大时光笺) is an interactive visual storytelling site built on the map of Hainan University's campus. It pairs Galgame-style illustrated characters with real campus locations to present decisive campus moments through a combined format of images, written narratives, and an "envelope-opening" ceremony. Beyond the main experience, the project extends to a `/creation` community board where student contributions are showcased, and an `/admin` back-office for managing content and triggering data syncs.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Interactive Campus Map" icon="map-pin">
+    Location pins aggregated from `LocationPoint` records let visitors explore stories anchored to real campus spots, rendered as an SVG coordinate system.
+  </Card>
+  <Card title="Envelope-Opening Experience" icon="envelope-open">
+    The homepage presents an `EnvelopeIntro` opening ritual before revealing each story — a signature interaction built with Framer Motion v12 and Lenis smooth scrolling.
+  </Card>
+  <Card title="Creation Board" icon="newspaper">
+    The `/creation` route renders a sticky-note waterfall of community submissions sourced from a separate Feishu Bitable table, aggregated into `CreationCard` units.
+  </Card>
+  <Card title="Admin Back-office" icon="shield-check">
+    The `/admin` route provides a password-protected dashboard with manual sync triggers and a `node-schedule`-powered automatic sync scheduler.
+  </Card>
+  <Card title="Feishu Bitable CMS" icon="table">
+    All story content, character images, and community entries are managed directly in Feishu (Lark) spreadsheets — no separate CMS infrastructure required.
+  </Card>
+  <Card title="Aliyun OSS Image Pipeline" icon="cloud">
+    The sync script downloads Feishu attachments, deduplicates by MD5 hash, uploads to Aliyun OSS, and writes permanent URLs back to the Feishu table automatically.
+  </Card>
+</CardGroup>
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16.1.6 (App Router, Turbopack) |
+| Language | TypeScript 5+ (Strict Mode) |
+| Styling | Tailwind CSS v4 + Radix UI / Shadcn-style components |
+| Animation | Framer Motion v12 |
+| Smooth scroll | Lenis 1.3 (desktop envelope state) |
+| State | Zustand v5 |
+| CMS | Feishu Bitable (多维表格) |
+| Object storage | Aliyun OSS |
+| Scheduled tasks | node-schedule (`/admin` auto-sync) |
+| Testing | Playwright (E2E, `tests/e2e/`) |
+
+## Project structure
+
+The entire application lives under `src/`:
+
+```
+src/
+├── app/
+│   ├── admin/              # /admin back-office (login + protected group)
+│   ├── api/admin/          # Back-office API routes (login, manual sync)
+│   ├── creation/           # /creation community board
+│   ├── layout.tsx          # Global layout + local font registration
+│   └── page.tsx            # Homepage (envelope intro + scroll sections)
+├── components/
+│   ├── ui/                 # Shadcn-style base components
+│   ├── shared/             # EnvelopeIntro, GuideLine, CustomScrollbar, etc.
+│   ├── sections/           # AboutProject, AboutUs, Credits, Footer, ScrollSections
+│   ├── desktop/            # Desktop-specific components (Dev B)
+│   ├── mobile/             # Mobile-specific components (Dev C)
+│   └── creation/           # Creation board sticky-note waterfall
+├── lib/
+│   ├── admin/              # Auth, scheduler, config read/write
+│   ├── sync-service.ts     # Feishu + OSS sync service (CLI and API shared)
+│   ├── types.ts            # Core domain types (SSOT)
+│   └── store.ts            # Zustand global state
+├── config/                 # admin.json, locations.json, etc.
+├── data/                   # Sync output: content.json, creation-board.json
+└── scripts/                # sync-feishu.ts + Feishu/OSS debug scripts
+```
+
+Static assets (including local fonts `ChillDINGothic_SemiBold.otf` and `ZouLDFXKAJ.ttf`) live in `public/`. End-to-end tests are in `tests/e2e/`. The `agents/` and `.opencode/agents/` directories hold collaboration assets and are excluded from the TypeScript compilation boundary.
+
+## Core data model
+
+All domain types are defined in `src/lib/types.ts` as the single source of truth:
+
+- **`Story`** — a homepage story record with character, image URLs, narrative text, author, date, and a `locationId` reference.
+- **`LocationPoint`** — a campus map pin with SVG percentage coordinates and an array of associated `Story` objects.
+- **`CreationIdea` / `CreationEntry` / `CreationCard`** — the three-tier model for the creation board: raw Feishu records, per-card display entries, and the aggregated card unit rendered on the frontend.
+- **`Contributor`** — a credits entry sourced from the Feishu contributors table.
+
+## Developer team
+
+The project follows a strict ownership model to prevent merge conflicts across three concurrent workstreams:
+
+| Role | Focus area | Branch |
+|---|---|---|
+| **Developer A** | Architecture, data pipeline, back-office, shared infra | `feat/infra` |
+| **Developer B** | Desktop campus map, scroll/story board | `feat/desktop` |
+| **Developer C** | Mobile waterfall layout and detail-page transitions | `feat/mobile` |
+
+All feature branches merge into `dev` for integration, then promote to `main` for Vercel production deployment via pull request.

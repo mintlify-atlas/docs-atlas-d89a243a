@@ -1,0 +1,106 @@
+---
+title: "Mobile story feed and immersive detail view"
+description: "Vertical story waterfall, shared-element detail modal, static map FAB, and gesture system powering the HNU-TimeLetter mobile experience on ≤ 768 px screens."
+---
+
+On screens 768 px wide or narrower, HNU-TimeLetter replaces the interactive map with a purpose-built mobile experience designed around one-thumb browsing. Rather than shrinking the desktop map, the mobile path presents stories as a vertical waterfall feed — each card a thumbnail paired with location and character information — and uses a shared-element transition to expand a selected story into a full-screen immersive detail view. A floating action button provides access to a static reference map when a visitor wants geographic context without leaving the feed. All mobile components live under `src/components/mobile/`.
+
+## Component overview
+
+| File | Role |
+|------|------|
+| `src/components/mobile/MobileExperience.tsx` | Root container; decides between feed and detail views |
+| `src/components/mobile/StoryFeed.tsx` | Vertical masonry waterfall of story cards |
+| `src/components/mobile/MobileDetailModal.tsx` | Full-screen immersive story detail overlay |
+| `src/components/mobile/StaticMapModal.tsx` | Static campus map image overlay (FAB target) |
+
+## Story waterfall feed
+
+`StoryFeed` renders all stories from `content.json` as a vertical masonry grid. Cards are laid out in a two-column waterfall: column heights are tracked independently so shorter cards fill gaps naturally, producing an organic "stamp collection" density.
+
+<CardGroup cols={2}>
+  <Card title="Card anatomy" icon="image">
+    Each card shows `mainImageUrl` as a thumbnail, the `locationName`, the `characterName`, and the story `date`. The card height follows the image's natural aspect ratio — no forced cropping.
+  </Card>
+  <Card title="Native scroll" icon="arrow-down">
+    No Lenis on mobile. The feed uses standard browser scroll. This is intentional: native momentum scrolling on iOS and Android is more reliable than JS-driven scroll for a dense image feed.
+  </Card>
+</CardGroup>
+
+### Card ordering
+
+Stories are grouped by `locationId`. Within each group they are ordered by `date`. Across groups, the ordering follows the sequence defined in the `LocationPoint` list in `content.json`. This means related stories from the same campus location appear near each other in the feed, reinforcing the geographic narrative.
+
+## Floating action button (FAB)
+
+A map icon button is fixed at the bottom-right of the viewport at all times during feed browsing. Tapping it opens `StaticMapModal`, which renders a static image of the Hainan University campus.
+
+<Note>
+The static map is **view-only**. It has no interactive pins, no tap targets, and no connection to the `LocationPoint` data. Its sole purpose is to let a visitor orient themselves geographically while browsing stories. Tapping outside the overlay or the close button dismisses it.
+</Note>
+
+## Detail modal and shared-element transition
+
+Tapping a feed card opens `MobileDetailModal`. The opening transition is a shared-element animation: the card's thumbnail image expands from its position in the feed to fill the top half of the detail view.
+
+<Steps>
+
+### Tap card in feed
+
+The tapped card's bounding rect is captured. Framer Motion's `layoutId` system matches the card image in the feed to the image element inside `MobileDetailModal`, driving an automatic interpolated transition between the two positions and sizes.
+
+### Image expands to ~50% screen height
+
+The detail view's top half is occupied by the `mainImageUrl` at full resolution. Left and right arrow buttons are overlaid on the image for in-location story switching.
+
+### Character info appears below image
+
+The character avatar (`avatarUrl`, circular crop), `characterName`, `locationName`, and `date` appear in a compact info row beneath the image.
+
+### Story text scrolls independently
+
+The story `content` renders in a scrollable region that fills the remaining screen height. The text area uses native scroll; the image and character info above it remain pinned.
+
+</Steps>
+
+## Gesture system
+
+<Tabs>
+
+<Tab title="Arrow buttons">
+The left and right chevron buttons overlaid on the detail image switch between stories at the **same location**. Pressing right advances to the next story in the current location's `stories[]` array (wrapping around). Pressing left goes to the previous story.
+</Tab>
+
+<Tab title="Left / right swipe">
+Swiping the image area left or right changes the **active location** — not just the story within a location. A left swipe moves to the next `LocationPoint` in the list; a right swipe moves to the previous. The first story at the new location is shown by default.
+</Tab>
+
+<Tab title="Pull-to-close">
+Dragging the detail view downward past a threshold velocity or distance triggers a close animation. The shared image shrinks back toward its origin card in the feed (reverse shared-element transition) before `MobileDetailModal` unmounts. A slow, deliberate downward drag that does not reach the threshold snaps back up.
+</Tab>
+
+</Tabs>
+
+<Warning>
+Left/right swipe and pull-to-close share the same drag surface (the image area). Framer Motion's drag constraints distinguish the two: the pull-to-close gesture is only triggered by a predominantly vertical drag (`y` velocity &gt; `x` velocity), while location-switching is triggered by a predominantly horizontal drag.
+</Warning>
+
+## Responsive guard
+
+`MobileExperience` is rendered by `src/app/map/page.tsx` when `useIsMobile()` returns `true` (viewport `≤ 768px`). The `InteractiveMap` component is not loaded on mobile at all — it is excluded from the component tree, not just hidden with CSS. This avoids loading the desktop map SVG, pin geometry calculations, and drag-stack logic on mobile devices.
+
+```typescript
+// src/app/map/page.tsx (simplified)
+const isMobile = useIsMobile(); // breakpoint: 768px
+
+return isMobile ? <MobileExperience /> : <InteractiveMap />;
+```
+
+## Performance considerations
+
+| Concern | Approach |
+|---------|----------|
+| Image loading | `next/image` with responsive `sizes` attribute; thumbnails in feed use a lower-resolution size hint than the full-res detail view |
+| Masonry layout | Column heights tracked in a `useRef` array, updated only on mount and resize — no layout thrashing per card render |
+| Shared-element cost | `layoutId` matching is scoped to the currently tapped card; the feed does not register all cards as potential layout sources simultaneously |
+| No Lenis overhead | Native scroll eliminates the 60 fps rAF loop that Lenis requires on desktop |

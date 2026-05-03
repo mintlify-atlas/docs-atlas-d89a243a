@@ -1,0 +1,166 @@
+---
+title: "Deploy HNU-TimeLetter to Vercel or self-hosted server"
+description: "Step-by-step guide to deploying HNU-TimeLetter on Vercel or a self-hosted Node.js server, including environment variables and build scripts."
+---
+
+HNU-TimeLetter is a Next.js application that fetches its content at build time from Feishu and Aliyun OSS. Deploying it means providing all the required environment variables and ensuring the build pipeline can reach both services. Vercel is the recommended platform because it handles builds, previews, and automatic re-deployment from Git with minimal configuration; self-hosted servers are also supported for teams that need persistent in-process scheduling via `node-schedule`.
+
+## Vercel deployment (recommended)
+
+<Steps>
+  <Step title="Connect your GitHub repository">
+    In the Vercel dashboard, click **Add New Project** and import the HNU-TimeLetter repository. Vercel detects the Next.js framework automatically.
+  </Step>
+  <Step title="Set the build command">
+    Set the Vercel build command to `npm run publish` (or `npm run build:with-sync`). Both run `npm run sync` first, then `next build`, so Feishu data is always fresh at deploy time.
+
+    <Warning>
+      The plain `npm run build` command runs only `next build` — it does **not** run the Feishu sync. Always use `npm run publish` or `npm run build:with-sync` for production deployments so the latest content is included.
+    </Warning>
+
+    ```bash
+    # Recommended for Vercel build command
+    npm run publish
+
+    # Equivalent alternative
+    npm run build:with-sync
+    ```
+  </Step>
+  <Step title="Add all environment variables">
+    In **Project Settings → Environment Variables**, add every variable from the table below. Apply them to the **Production**, **Preview**, and **Development** environments as appropriate.
+
+    | Variable | Required | Notes |
+    |---|---|---|
+    | `FEISHU_APP_ID` | Yes | From Feishu developer console |
+    | `FEISHU_APP_SECRET` | Yes | Keep secret |
+    | `FEISHU_APP_TOKEN` | Yes | Bitable document token |
+    | `FEISHU_TABLE_ID` | Yes | Stories table ID |
+    | `FEISHU_VIEW_ID` | Yes | Stories view ID |
+    | `FEISHU_CREATION_TABLE_ID` | Optional | Creation board table |
+    | `FEISHU_CREATION_VIEW_ID` | Optional | Creation board view |
+    | `FEISHU_CONTRIBUTORS_TABLE_ID` | Optional | Contributors table |
+    | `ALIYUN_OSS_REGION` | Yes | e.g. `oss-cn-guangzhou` |
+    | `ALIYUN_OSS_BUCKET` | Yes | Bucket name |
+    | `ALIYUN_OSS_ACCESS_KEY_ID` | Yes | Keep secret |
+    | `ALIYUN_OSS_ACCESS_KEY_SECRET` | Yes | Keep secret |
+    | `ADMIN_PASSWORD` | Yes | Strong secret, not `admin` |
+
+    <Warning>
+      Set `ADMIN_PASSWORD` to a strong, unique secret **before** the first production deployment. Leaving it unset causes the admin panel to accept the default password `admin`, exposing sync controls and credentials to anyone who finds the `/admin` URL.
+    </Warning>
+  </Step>
+  <Step title="Deploy">
+    Click **Deploy**. Vercel runs the build command (`npm run publish`), which syncs from Feishu and builds the static output. Subsequent pushes to `main` trigger automatic re-deployments.
+  </Step>
+</Steps>
+
+## Branch strategy
+
+| Branch | Role | Merge policy |
+|---|---|---|
+| `main` | Production — auto-deployed by Vercel | PR only, no direct push |
+| `dev` | Integration — all feature work merges here first | PR from feature branches |
+| `feat/infra` | Dev A (architecture, data pipeline, admin) | Merges to `dev` |
+| `feat/desktop` | Dev B (PC map, scroll, story board) | Merges to `dev` |
+| `feat/mobile` | Dev C (mobile waterfall, detail transitions) | Merges to `dev` |
+
+<Note>
+  Never push directly to `main`. Open a pull request from `dev` once the integration branch is stable and all E2E tests pass.
+</Note>
+
+## Available npm scripts
+
+| Script | Description |
+|---|---|
+| `npm run dev` | Start development server with Turbopack hot reload |
+| `npm run build` | Production build only (`next build`) — does **not** run sync |
+| `npm run build:with-sync` | Explicit sync then build (same effect as `build`) |
+| `npm run publish` | Sync + build alias — use for manual production releases |
+| `npm run sync` | Feishu data sync only — does not rebuild the site |
+| `npm run lint` | Run ESLint across the codebase |
+| `npm run test:e2e` | Run Playwright E2E tests in headless mode |
+| `npm run test:e2e:install` | Install Chromium for Playwright (first-time setup) |
+
+## Self-hosted server
+
+<Tabs>
+  <Tab title="Setup">
+    <Steps>
+      <Step title="Install dependencies">
+        Requires Node.js ≥ 20.
+
+        ```bash
+        npm install
+        ```
+      </Step>
+      <Step title="Create .env.local">
+        ```bash
+        cp .env.example .env.local
+        # Fill in all required variables
+        ```
+      </Step>
+      <Step title="Build and start">
+        ```bash
+        npm run build   # sync + build
+        npm run start   # start the production server
+        ```
+      </Step>
+      <Step title="Use a process manager">
+        The in-process `node-schedule` scheduler requires the Node.js process to stay alive. Use PM2 or a similar tool to manage restarts and logging.
+
+        ```bash
+        npm install -g pm2
+        pm2 start "npm run start" --name hnu-timeletter
+        pm2 save
+        pm2 startup
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Runtime directories">
+    The following directories are created at runtime and are **not** committed to git:
+
+    | Directory | Contents |
+    |---|---|
+    | `runtime/` | Sync job state and scheduler configuration snapshots |
+    | `logs/` | Sync logs written by the admin panel logger |
+
+    Ensure the process user has write access to both directories. On a fresh clone they will be created automatically on first run.
+  </Tab>
+</Tabs>
+
+## Data publish model
+
+HNU-TimeLetter uses a **build-time data** model: the JSON files in `src/data/` are embedded into the Next.js static output during `npm run build`. This means:
+
+1. Running `npm run sync` alone updates the JSON files on disk.
+2. Until the app is **rebuilt and restarted**, visitors still see the previous build's data.
+3. The admin panel's **Sync and publish** button automates the full sequence: sync → build → restart.
+
+<Warning>
+  On Vercel, every deployment is immutable. To publish new Feishu content without a code change, trigger a new deploy (via Vercel dashboard, the Vercel CLI `vercel --prod`, or a deploy hook).
+</Warning>
+
+## E2E testing
+
+<Steps>
+  <Step title="Install Chromium (first time only)">
+    ```bash
+    npm run test:e2e:install
+    ```
+  </Step>
+  <Step title="Run the test suite">
+    ```bash
+    npm run test:e2e
+    ```
+
+    Tests live in `tests/e2e/`. The default Playwright config spins up a local dev server at `http://127.0.0.1:3000` automatically.
+  </Step>
+  <Step title="Debug with UI mode">
+    ```bash
+    npm run test:e2e:ui
+    ```
+
+    Opens the Playwright interactive UI for step-by-step debugging and trace inspection.
+  </Step>
+</Steps>

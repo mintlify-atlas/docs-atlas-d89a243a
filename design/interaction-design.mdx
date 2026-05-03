@@ -1,0 +1,292 @@
+---
+title: "Interaction design: animations and UX patterns"
+description: "Full UX specification for HNU-TimeLetter: envelope opening sequence, smooth scroll system, desktop map states, mobile gestures, and global navigation bar."
+---
+
+HNU-TimeLetter is built around a ritual of **opening a letter**. Every interaction — from the wax seal cracking to the map rolling up like a scroll — is designed to preserve that sense of ceremony. The site uses a dual-track responsive strategy: desktop users experience an immersive horizontal map canvas; mobile users browse a compact stamp album. Both tracks share the same envelope opening entrance and the same global navigation capsule.
+
+## Envelope opening sequence
+
+The intro page (`/`) presents a full-screen envelope as the first interaction. Clicking the envelope triggers a multi-phase animation that transitions the user from the "letter not yet opened" state into the map/album experience.
+
+### State machine
+
+```typescript
+// State flow
+type IntroState = "idle" | "opening";
+
+// Flags set during the opening sequence
+isTransitioning: boolean  // full-screen overlay is active
+isEnvelopeOpened: boolean // animation complete; main experience visible
+```
+
+<Steps>
+  <Step title="Idle state">
+    The envelope rests at a fixed size on the right side of a five-column grid. The wax seal holds a static `−5deg` tilt. The ribbon runs the full viewport height on the left. No hover deformation is applied to the wax seal.
+  </Step>
+  <Step title="Click — enter `opening` phase">
+    User clicks the envelope body. State transitions to `opening`. The wax seal performs a crack animation.
+  </Step>
+  <Step title="Cover flip">
+    The envelope flap animates open. Its `zIndex` transitions from `30` → `0` via a Framer Motion delayed update (`delay: 0.15s`). This delay prevents the flap from visually covering the letter as it begins to emerge.
+  </Step>
+  <Step title="Letter reveal and expand">
+    The letter slides upward out of the envelope, moves to the viewport center, and scales to fill the screen. The `isTransitioning` flag is set to `true` immediately before this scale begins, activating a full-screen transition overlay.
+  </Step>
+  <Step title="Overlay fade and main experience">
+    Once the letter fills the viewport, `isEnvelopeOpened` is set to `true`. The page layer removes the overlay with a delayed fade. The map / album experience is now visible.
+  </Step>
+</Steps>
+
+### Entrance animations (before click)
+
+| Element | Animation | Duration | Easing |
+|---|---|---|---|
+| Ribbon | `clip-path` top-to-bottom reveal via `double rAF` | `1000ms` | `cubic-bezier(0.16, 1, 0.3, 1)` |
+| Envelope | Spring drop from above, then gentle breathing float | — | Spring |
+| Title | Fade in after ribbon completes | — | — |
+| Title (on open) | Shift upward + slight blur fade-out | — | — |
+
+<Note>
+The `isTransitioning` overlay also protects the footer during the transition. The fixed-position footer would otherwise become visible through the scaling letter. See [Footer reveal parallax](#footer-reveal-parallax) for details.
+</Note>
+
+## Scroll-down page group
+
+Below the envelope (in the pre-open state), three full-screen pages extend downward: About Project, About Us, and Credits. Desktop users in this state have a custom smooth scroll system.
+
+### Lenis smooth scroll
+
+```typescript
+// src/lib/useVirtualScroll.ts
+const lenis = new Lenis({
+  duration: 1.2,
+  easing: (t: number) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), // exponential
+  smoothWheel: true,
+  wheelMultiplier: 1,
+  touchMultiplier: 2,
+});
+```
+
+Mobile devices retain native scroll. The `html.lenis` class hides the native scrollbar and enables the Lenis state classes (`lenis-smooth`, `lenis-stopped`, `lenis-scrolling`).
+
+### Custom scrollbar
+
+The native scrollbar is hidden via `globals.css`. `src/components/shared/CustomScrollbar.tsx` renders a DOM-synced replacement that is only mounted on desktop in the pre-open scroll state.
+
+```css
+/* Track */
+width: 15px;
+background: transparent;
+pointer-events: none;
+
+/* Thumb */
+width: 10px;
+border-radius: 5px;
+border: 1px solid #c23643;    /* default */
+background: transparent;       /* default */
+
+/* Hover state */
+background: #c23643;           /* solid fill */
+```
+
+The thumb height is calculated as `vh × (vh / documentHeight)` and updates via `ResizeObserver`. Position syncs to `lenis.on('scroll', ({ scroll, limit }))`, falling back to `window.scroll` when no Lenis instance is available.
+
+<Tip>
+Set `pointer-events: none` on the track and `pointer-events: auto` on the thumb only. This prevents the scrollbar from blocking page interactions outside its own hit area.
+</Tip>
+
+### Red guide line (GuideLine.tsx)
+
+A single continuous SVG `<path>` runs from the bottom of the hero ribbon through all three scroll pages, tracing a diagonal across the "About Us" section and terminating at the footer boundary.
+
+**Path anchor points** (where `ribbonX = vw × 0.2 − 50px`):
+
+| Point | Coordinates |
+|---|---|
+| P1 | `(ribbonX, apTop)` — hero bottom / ribbon visual end |
+| P2 | `(ribbonX, apTop + apH × 0.10)` |
+| P3 | `(19.15%vw, apTop + apH × 0.125)` |
+| P4 | `(107.5%vw, apTop + apH × 0.4043)` |
+| P5 | `(−2.19%vw, crTop + crH × 0.654)` — long diagonal spans all of About Us |
+| P6 | `(32%vw, crTop + crH + 80)` — clipped to credits bottom by SVG mask |
+
+**Visual mask**: The SVG viewport is hard-clipped: top = `P1.y − 60`, bottom = `creditsBottom`. P6 intentionally extends 80px beyond the bottom edge; `overflow: hidden` clips the excess so the stroke tip lands precisely at the footer boundary.
+
+**Progress animation — y-aware mapping with three anchor phases**:
+
+<Steps>
+  <Step title="Start phase (scrollY ≤ 500px)">
+    `anchor = 1.0`. The stroke tip tracks the viewport bottom edge. Ensures the line appears immediately as the user begins scrolling.
+  </Step>
+  <Step title="Mid phase (500px < scrollY < transitionStart)">
+    `anchor = 0.6`. The tip locks to 60% of the viewport height, staying within the reading zone as the user moves through About Project and About Us.
+  </Step>
+  <Step title="End phase (scrollY ≥ transitionStart = 0.7 × snapScroll)">
+    `anchor` interpolates linearly from `0.6` → `1.0`. The tip sinks to meet the footer boundary, visually "returning to" the red footer band.
+  </Step>
+  <Step title="Bottom snap">
+    When `viewBottom ≥ creditsBottom`, progress is forced to `1.0` regardless of anchor calculation.
+  </Step>
+</Steps>
+
+**Non-reversibility**: Progress is cached using `Math.max(cachedMaxProgress, currentProgress)`. Scrolling back up does not retract the already-revealed stroke.
+
+```typescript
+// Non-reversible progress update
+cachedMaxProgress = Math.max(cachedMaxProgress, currentProgress);
+path.style.strokeDashoffset = String(totalLength * (1 - cachedMaxProgress));
+```
+
+## Desktop map states (PC experience)
+
+The map view (`/map`) uses a horizontal "scroll of time" metaphor. The map transitions through four named states driven by user clicks.
+
+### State machine
+
+```
+idle → rolling → rolled → unrolling → idle
+```
+
+<Steps>
+  <Step title="idle">
+    Map fills 100% of the viewport. Location pins are interactive. Story board is not visible.
+  </Step>
+  <Step title="rolling (pin click)">
+    User clicks a location pin. The map container begins contracting from left to right using `overflow: hidden` clipping. The inner map maintains its `100vw` width with right-anchoring so pin coordinates remain accurate throughout the animation.
+  </Step>
+  <Step title="rolled (56px strip)">
+    Map has fully contracted to a 56px vertical strip on the right edge. **Only after this state is fully complete** does the story board begin its entrance. This sequencing prevents the two animations from competing visually.
+  </Step>
+  <Step title="unrolling (strip click)">
+    User clicks the scroll strip. Story board exits first (flies upward and fades out). Only after the board has fully departed does the map container expand back to 100% width. State resets to `idle` and the active location is cleared.
+  </Step>
+</Steps>
+
+### Story board entrance
+
+The story board uses a **Spring animation** with no internal delay, entering from below immediately after `rolled` state is confirmed. Its `z-index: 30` places it above the map/scroll container (`z-index: 10`), allowing dragged cards to overlap the scroll strip without clipping.
+
+### Card stack interaction
+
+Cards within the story board support left and right drag gestures that cycle through stories for the active location. Cards loop continuously.
+
+<Note>
+Layer order: Story Board (`z-30`) > Map / Scroll Container (`z-10`). This is intentional — dragging cards must be able to visually overlap the strip without being cropped.
+</Note>
+
+## Mobile gestures
+
+Mobile users (`≤ 768px`) see the stamp album view — a vertical story feed without the interactive map component.
+
+<CardGroup cols={2}>
+  <Card title="Tap arrows" icon="arrow-left-right">
+    Switch between different stories at the **same location**. Arrows overlay the top image area of the detail modal.
+  </Card>
+  <Card title="Left / right swipe" icon="hand-point-right">
+    Navigate to a **different location** entirely. Implemented as a horizontal swipe gesture on the detail modal.
+  </Card>
+  <Card title="Pull-to-close" icon="arrow-down">
+    Drag the detail modal downward to dismiss and return to the story feed list.
+  </Card>
+  <Card title="FAB (map button)" icon="map">
+    Fixed bottom-right floating button opens a static map image for geographic orientation. Not interactive.
+  </Card>
+</CardGroup>
+
+### Detail modal layout
+
+The modal is triggered by a shared element transition: tapping a feed card expands its image to fill the screen. Internal layout from top to bottom:
+
+1. **Hero image** (~50% viewport height) with left/right arrow overlays
+2. **Character info strip** — avatar, name, role
+3. **Scrollable story text** — uses `.text-reading` class
+
+## Global navigation bar
+
+The navigation bar is a fixed vertical pill in the top-right corner, present on all routes. It never changes size or position based on route or scroll state.
+
+### Appearance
+
+```css
+position: fixed;
+top: right corner;
+backdrop-filter: blur(/* value */);
+background: Surface color at reduced opacity;
+border: 1px solid #c23643;
+border-radius: 999px; /* full pill */
+z-index: above page content, below modals;
+writing-mode: vertical-rl; /* vertical text */
+```
+
+### Routes
+
+| Label | Route | Description |
+|---|---|---|
+| 主页 | `/` | Envelope intro and scroll-down pages |
+| 地图 | `/map` | Interactive map / stamp album main experience |
+| 公示板 | `/creation` | Community creation board |
+
+### Selected state
+
+The active route displays a solid red capsule (`#c23643`) inset within the outer pill container. The inner capsule has equal left/right padding from the container walls ("pill inside pill"). Route changes animate using Framer Motion's **layout animation** — the capsule slides smoothly to the newly active item rather than hard-cutting.
+
+```tsx
+// Inner selected capsule — Framer Motion layout animation
+<motion.div
+  layoutId="nav-selected"
+  className="bg-primary rounded-full px-[gap] py-[padding]"
+  transition={{ type: "spring", stiffness: 300, damping: 30 }}
+/>
+```
+
+### Homepage variant
+
+On `/`, the navigation bar has an additional red color block appended directly below the pill container, visible only when `scrollY === 0`.
+
+| Property | Value |
+|---|---|
+| Height | ~30vh |
+| Width | Same as pill container (~7vw) |
+| Background | `#c23643` |
+| Border radius | Left-bottom corner only; other three corners are square |
+| Connection | Top edges flush with pill container bottom — visually seamless |
+
+As the user scrolls down, this block fades out to fully transparent. The transition must be smooth (opacity animation, no color jump). Once scroll begins, the nav bar reverts to the standard frosted-glass + red-border appearance.
+
+<Tip>
+This red block visually echoes the full-height ribbon on the left side of the hero layout, reinforcing the page's vertical framing. It is a decoration layer outside the pill — do not modify the pill container dimensions to accommodate it.
+</Tip>
+
+## Footer reveal parallax
+
+The footer is always present in the DOM but hidden beneath the page's main content. As the Credits section scrolls upward out of view, the footer gradually becomes visible — a "reveal" rather than a slide-in.
+
+### Mechanism
+
+```
+┌─────────────────────────┐  ← viewport top
+│                         │
+│    Main content         │  scrolls upward with page
+│    (Credits section)    │
+│                         │
+└─────────────────────────┘  ← viewport bottom
+         ↕ reveals ↕
+┌─────────────────────────┐  ← fixed, anchored to viewport bottom
+│    Footer               │
+│    (position: fixed)    │
+└─────────────────────────┘
+```
+
+- `Footer`: `position: fixed`, anchored to the viewport bottom. Always at `z-index` below main content.
+- `FooterSpacer`: a `position: static` div in document flow with the same height as the footer. Reserves the scroll space that "uncovers" the footer as the user reaches the bottom.
+
+### Transition protection
+
+While `isTransitioning` is active during the envelope opening sequence, a full-screen overlay covers the footer. This prevents the footer from becoming visible through the expanding letter during the opening animation. The overlay is removed after `isEnvelopeOpened` is set.
+
+### Footer structure
+
+1. **Navigation links** — red background `#c23643`, four link cards in a row: QQ group, project homepage, GitHub repository, email contact
+2. **HIMEMATSU logotype** — `public/HIMEMATSU.svg`, responsive full-width, red background
+3. **Sub-footer copyright bar** — red background, `Copyright © 2026 HIMEMATSU. All rights reserved.` on the left, ICP registration number on the right; secondary text at 90% opacity using `#ECE9E4`

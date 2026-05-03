@@ -1,0 +1,136 @@
+---
+title: "Interactive campus map and story board (desktop)"
+description: "How the desktop scroll-map, rolling animation state machine, story card stack, and QuillSearch work together on viewports wider than 768 px."
+---
+
+After the envelope opening ceremony completes, desktop visitors land on the interactive campus map — a full-screen SVG-based layout of Hainan University that turns every marked location into a window onto a character's story. The map is not a static image with tooltips; it is a responsive state machine. Clicking a location pin collapses the map rightward into a narrow scroll strip, reveals a story card stack that visitors can drag through, and keeps the scroll strip permanently visible as a one-click path back to the full map. The entire experience lives in `src/components/desktop/InteractiveMap.tsx` and is only rendered on viewports `> 768 px`.
+
+## Map state machine
+
+The four-phase cycle governs every animated element on the desktop view.
+
+```
+idle
+ └─(click location pin)──► rolling
+                              └─(map animation complete)──► rolled
+                                                              └─(click scroll strip)──► unrolling
+                                                                                          └─(story exits + map expands)──► idle
+```
+
+<Steps>
+
+### idle — full-screen map
+
+The map SVG fills the viewport. All `LocationPoint` pins are visible and interactive. The story panel is not mounted. `QuillSearch` is active in the top area, allowing visitors to jump directly to a named location.
+
+### rolling — map collapses
+
+On pin click, `setPhase('rolling')` fires and `setActiveLocation(location)` stores the target. The map container translates leftward via `translateX` animation (not a `width` change — this keeps layout work off the critical path). The transition uses `duration: 0.52s, ease: [0.16, 1, 0.3, 1]`.
+
+### rolled — 56 px scroll strip visible
+
+When the map animation completes, `setPhase('rolled')` and `setIsMapRolled(true)` are called. The story panel springs in from below (`framer-motion` spring, no internal delay) to fill the space the map vacated. The left-side 56 px strip remains — this is the **卷轴条 (scroll strip)**, always on top via `z-30`.
+
+### unrolling — story exits, map expands
+
+Clicking the scroll strip sets `phase = 'unrolling'`. The story panel exits first (slides up and fades out). Only after `AnimatePresence.onExitComplete` fires does `setIsMapRolled(false)`, which triggers the map to translate back to full width (`duration: 0.52s, ease: [0.32, 0.72, 0, 1]`). Once expanded, `setPhase('idle')` clears the active location.
+
+</Steps>
+
+<Note>
+The sequencing in steps 3 and 4 is deliberate. The story panel must fully exit **before** the map expands. This is why `isMapRolled` is decoupled from `phase` — the map clipPath animation is driven by `isMapRolled`, not by the phase value directly.
+</Note>
+
+## Layer z-index structure
+
+```
+z-30  Scroll strip (卷轴条) — always on top; story cards can visually overlap it
+z-10  Story panel — above the map container
+z-0   Map container (inner 100vw div, right-anchored)
+```
+
+This ordering ensures that when a story card is dragged leftward past the strip edge, it is not clipped by the map container.
+
+## Data types
+
+The map renders from `LocationPoint` objects, each of which bundles a campus location with all its associated stories.
+
+```typescript
+// src/lib/types.ts
+
+export interface LocationPoint {
+  id: string;
+  name: string;
+  x: number;   // 0–100 (SVG coordinate percentage)
+  y: number;   // 0–100
+  stories: Story[];
+}
+
+export interface Story {
+  id: string;
+  characterId: string;
+  characterName: string;
+  avatarUrl: string;       // Q-style avatar path
+  mainImageUrl: string;    // Full-resolution image path
+  content: string;         // Story body text
+  author: string;
+  date: string;            // YYYY.MM.DD
+  locationId: string;
+  locationName?: string;
+}
+```
+
+Location data is loaded from `src/data/content.json` (Feishu-synced static file) and typed via these interfaces. The `x`/`y` fields are percentage values matched to the SVG `viewBox`, so pin positions remain accurate regardless of how the map is scaled or contained.
+
+## Map containment and pin positioning
+
+The `useContainedMapSize` hook (`src/lib/hooks.ts`) computes the pixel dimensions of the map image as rendered inside its `object-fit: contain` container. Pin `<button>` elements are positioned absolutely using `left: ${x}%` and `top: ${y}%` relative to the contained image area, not the container. A `ResizeObserver` recalculates these offsets whenever the container resizes; the observer is throttled during roll/unroll transitions to avoid unnecessary re-renders.
+
+## Story card stack
+
+<Tabs>
+
+<Tab title="Layout">
+The `StoryCardStack` component (`src/components/desktop/StoryCardStack.tsx`) renders the stories for the active location as a physical card stack — the front card is fully visible, cards behind it peek out at the bottom with slight offsets. The stack sits centred in the story panel area.
+</Tab>
+
+<Tab title="Drag interaction">
+Cards support left and right drag-to-dismiss via Framer Motion drag constraints. On release past a threshold, the card flies out in the drag direction and the next story cycles to the front. The stack loops: after the last story, the first appears again. Drag velocity is factored into the exit trajectory so a fast flick feels physically distinct from a slow push.
+</Tab>
+
+<Tab title="Card design">
+Each card uses a stamp-style layout: full-resolution `mainImageUrl` in the upper portion, a perforated border detail, and the character info + story text below. The card dimensions are fixed to maintain visual consistency across varying story text lengths.
+</Tab>
+
+</Tabs>
+
+## Scroll strip (卷轴条) design
+
+The scroll strip is the 56 px-wide vertical bar that remains on the right side of the viewport while the map is rolled. It uses a gradient background and subtle texture to evoke a rolled paper scroll — the core visual metaphor of the desktop experience ("时光画卷 / timeline scroll").
+
+| Property | Value |
+|----------|-------|
+| Width | `56px` (constant `STRIP_WIDTH`) |
+| Position | Right edge of the viewport, `z-30` |
+| Click target | Full height; triggers `unrolling` phase |
+| Visual | Gradient background, vertical text label |
+
+## QuillSearch component
+
+`src/components/desktop/QuillSearch.tsx` renders a search input in the idle map state. Typing a location or character name fuzzy-matches against the loaded `LocationPoint` list. On selection:
+
+1. If the map is currently rolled, `unrolling` fires first and completes.
+2. The matching pin receives a `bouncingPinId` flag, triggering a spring bounce animation to draw the user's eye.
+3. `searchTargetRef` holds the target `locationId` so the bounce fires **after** the map is fully expanded, not during the unroll animation.
+
+<Tip>
+QuillSearch is only active during the `idle` phase. In `rolled` or transition states the component is hidden to avoid conflicting with the active story view.
+</Tip>
+
+## Story text area
+
+`src/components/desktop/StoryTextArea.tsx` provides the scrollable text region inside each story card. It uses a custom thin scrollbar (`1px #c23643`, visible on hover) styled to match the site's colour language. Long story bodies scroll independently without affecting the card stack drag state.
+
+## Responsive guard
+
+`InteractiveMap` is only rendered when the viewport is `> 768px`. The conditional branch lives in `src/app/map/page.tsx`. On mobile, the same route renders `MobileExperience` instead. There is no graceful degradation of the interactive map to smaller screens — the two experiences are intentionally separate implementations.

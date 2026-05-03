@@ -1,0 +1,544 @@
+---
+title: "Data sync system: Feishu to local JSON pipeline"
+description: "Architecture reference for the Feishu-to-JSON sync pipeline: job model, table registry, Admin API endpoints, publish modes, and concurrency strategy."
+---
+
+The HNU-TimeLetter sync system pulls content from three Feishu Bitable tables, processes binary attachments through Aliyun OSS, and writes the results to local JSON files that Next.js consumes at build time. The system is designed for a single-instance, always-on Node.js server and deliberately avoids databases, external queues, and distributed locks in v1. Every sync run is modelled as a typed `SyncJobRecord` with granular step statuses, so the back-office UI can display exactly what happened — and what still needs a publish step before users see the changes.
+
+## Architecture overview
+
+```text
+┌──────────────────────────────────────┐
+│  Trigger layer                        │
+│  CLI  ·  Admin API  ·  Scheduler     │
+└──────────────┬───────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────┐
+│  SyncOrchestrator                    │
+│  Job create · Lock · Steps · Status  │
+└──────┬──────────┬──────────┬─────────┘
+       │          │          │
+       ▼          ▼          ▼
+  locations   stories  creation_board
+  module      module   module
+       │          │          │
+       └──────────┴──────────┘
+                  │
+                  ▼
+         Write JSON outputs
+                  │
+                  ▼
+          Need publish?
+           │         │
+          No        Yes
+           │         │
+        Finish    Build + Restart
+```
+
+Three entry points — the CLI, the Admin API, and the scheduler — all converge on the same `SyncOrchestrator`. The orchestrator creates a `SyncJobRecord`, acquires the process lock, runs the selected table modules in order, and optionally triggers a build-and-restart publish phase.
+
+## Sync tables
+
+The system manages three table modules. Each module is independently selectable per job run.
+
+| Key | Output file | Dependencies |
+|---|---|---|
+| `locations` | `src/config/locations.json` | None — fully independent |
+| `stories` | `src/data/content.json` | Needs location coordinates; can read local file if `locations` is not in scope |
+| `creation_board` | `src/data/creation-board.json` | None — fully independent |
+
+A fourth sync target — `contributors` — produces `src/data/contributors.json` for the Credits section on the home page.
+
+## Entry points
+
+### CLI
+
+```bash
+npm run sync
+```
+
+Executes `src/scripts/sync-feishu.ts` via `tsx`. Equivalent to calling `runSyncJob` with `triggeredBy: 'cli'`. Suitable for local development and CI pre-build steps.
+
+### Admin API
+
+`POST /api/admin/sync/jobs` — creates a job and returns immediately with `202 Accepted`. The job continues running in the background; the caller polls `GET /api/admin/sync/jobs/:jobId` for status updates.
+
+### Scheduler
+
+`src/lib/admin/scheduler.ts` uses `node-schedule` to trigger `createSyncJob` on a configurable cron expression. The scheduler defaults to `sync-data` only — automated runs do not trigger a build or restart. Publish operations are reserved for deliberate human action.
+
+<Warning>
+`node-schedule` is an in-process scheduler and only works correctly under the single-instance server deployment model. If the process restarts, jobs that were scheduled but had not yet fired are lost. Do not use this deployment pattern with container auto-scaling or blue-green deploys.
+</Warning>
+
+## Data publish modes
+
+```typescript
+export type DataPublishMode =
+  | 'build_time'
+  | 'runtime_api';
+```
+
+The system is currently fixed to `build_time`. This means:
+
+- `src/data/*.json` and `src/config/locations.json` are **build-time data** — statically imported by Next.js during `next build`.
+- Running a sync job updates the files on disk but does **not** update live pages until a `next build` + server restart cycle completes.
+- `runtime_api` mode (where the frontend fetches data at request time from `runtime/data/`) is reserved as a future CMS-evolution path and is not active in v1.
+
+<Note>
+The v1 decision to use `build_time` is intentional. It minimises frontend changes, keeps page performance predictable, and concentrates failure surface in the sync-and-build phase rather than in runtime data fetching.
+</Note>
+
+## Job model
+
+### SyncJobKind
+
+```typescript
+export type SyncJobKind =
+  | 'sync-data'
+  | 'sync-data-and-publish';
+```
+
+| Kind | Behaviour |
+|---|---|
+| `sync-data` | Fetches from Feishu, processes OSS attachments, writes JSON. Data is updated on disk; live pages are unchanged until next build. |
+| `sync-data-and-publish` | Same as above, then runs `next build` and restarts the server. Live pages serve new data after completion. |
+
+### Job statuses
+
+| Status | Meaning |
+|---|---|
+| `queued` | Job has been created; execution has not started yet |
+| `running` | Orchestrator is actively executing table modules |
+| `success` | All selected tables completed without errors |
+| `partial_success` | At least one table succeeded; at least one had warnings or non-fatal errors |
+| `failed` | A critical error prevented successful completion |
+| `canceled` | Job was abandoned (e.g. lock expiry of a prior stale job) |
+
+### Step statuses
+
+Each table module run produces a `SyncJobStep` entry with its own status:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Step has not started |
+| `running` | Step is currently executing |
+| `success` | Step completed without issues |
+| `success_with_warnings` | Step completed but some records failed; output was still written |
+| `skipped` | Step was not in the requested `tables` scope |
+| `failed` | Step could not produce output; job may continue or halt based on `continueOnTableError` |
+
+### TypeScript interfaces
+
+<Tabs>
+  <Tab title="SyncRunRequest">
+    ```typescript
+    export interface SyncRunRequest {
+      kind?: SyncJobKind;
+      tables?: SyncTableKey[];
+      dependencyMode?: DependencyMode;
+      includeAssets?: boolean;
+      continueOnTableError?: boolean;
+      triggeredBy?: 'admin-ui' | 'scheduler' | 'cli';
+      note?: string;
+    }
+    ```
+  </Tab>
+  <Tab title="SyncJobRecord">
+    ```typescript
+    export interface SyncJobRecord {
+      jobId: string;
+      kind: SyncJobKind;
+      status: 'queued' | 'running' | 'success' | 'partial_success' | 'failed' | 'canceled';
+      publishStatus?: 'not_required' | 'pending' | 'building' | 'published' | 'publish_failed';
+      tables: SyncTableKey[];
+      effectiveTables: SyncTableKey[];
+      triggeredBy: 'admin-ui' | 'scheduler' | 'cli';
+      createdAt: string;
+      startedAt?: string;
+      syncedAt?: string;
+      publishedAt?: string;
+      finishedAt?: string;
+      durationMs?: number;
+      steps: SyncJobStep[];
+      summary?: Record<string, unknown>;
+      warnings: string[];
+      errors: string[];
+    }
+    ```
+  </Tab>
+  <Tab title="SyncJobStep">
+    ```typescript
+    export interface SyncJobStep {
+      step: string;
+      status: 'pending' | 'running' | 'success' | 'success_with_warnings' | 'skipped' | 'failed';
+      startedAt?: string;
+      finishedAt?: string;
+      summary?: {
+        totalRecords?: number;
+        successRecords?: number;
+        skippedRecords?: number;
+        failedRecords?: number;
+        filesWritten?: string[];
+        [key: string]: unknown;
+      };
+      warnings?: string[];
+      errors?: string[];
+    }
+    ```
+  </Tab>
+  <Tab title="Supporting types">
+    ```typescript
+    export type SyncTableKey =
+      | 'locations'
+      | 'stories'
+      | 'creation_board';
+
+    export type DependencyMode =
+      | 'read_local'       // Use existing local JSON for missing dependencies
+      | 'run_dependencies' // Also run dependency tables
+      | 'strict';          // Fail if a dependency has not been synced
+    ```
+  </Tab>
+</Tabs>
+
+## Admin API reference
+
+All endpoints are protected by the admin session cookie. Requests from unauthenticated clients receive `401`.
+
+---
+
+### GET /api/admin/sync/config
+
+Returns the current scheduler configuration and read-only runtime summary as two separate objects.
+
+**Response**
+
+```json
+{
+  "config": {
+    "enabled": true,
+    "cron": "0 0 * * *",
+    "defaultTables": ["locations", "stories", "creation_board"],
+    "defaultJobKind": "sync-data",
+    "dataPublishMode": "build_time"
+  },
+  "runtime": {
+    "currentJobId": null,
+    "lastJobId": "sync_20260421_100000_ab12cd",
+    "lastRunAt": "2026-04-21T10:00:00.000Z",
+    "lastPublishAt": "2026-04-21T10:10:00.000Z"
+  }
+}
+```
+
+<ResponseField name="config.enabled" type="boolean">
+  Whether the scheduler is currently active.
+</ResponseField>
+<ResponseField name="config.cron" type="string">
+  Cron expression for automatic runs, e.g. `"0 */6 * * *"` for every 6 hours.
+</ResponseField>
+<ResponseField name="config.defaultTables" type="string[]">
+  Table keys included in scheduler-triggered jobs.
+</ResponseField>
+<ResponseField name="config.defaultJobKind" type="string">
+  Default job kind for scheduler runs. Typically `"sync-data"`.
+</ResponseField>
+<ResponseField name="config.dataPublishMode" type="string">
+  Active data publish strategy. Currently always `"build_time"`.
+</ResponseField>
+<ResponseField name="runtime.currentJobId" type="string | null">
+  Job ID of the currently running job, or `null` if idle.
+</ResponseField>
+<ResponseField name="runtime.lastJobId" type="string">
+  Job ID of the most recently completed job.
+</ResponseField>
+<ResponseField name="runtime.lastRunAt" type="string">
+  ISO timestamp of the last completed sync.
+</ResponseField>
+<ResponseField name="runtime.lastPublishAt" type="string">
+  ISO timestamp of the last successful publish.
+</ResponseField>
+
+---
+
+### PATCH /api/admin/sync/config
+
+Updates the scheduler configuration. Only `config` fields are writable; `runtime` fields are always read-only and cannot be modified via this endpoint.
+
+**Request body**
+
+<ParamField body="enabled" type="boolean">
+  Enable or disable the scheduler.
+</ParamField>
+<ParamField body="cron" type="string">
+  New cron expression. Must be a valid 5-part cron string, e.g. `"0 */6 * * *"`.
+</ParamField>
+<ParamField body="defaultTables" type="string[]">
+  Array of `SyncTableKey` values to use as the default sync scope for scheduled jobs.
+</ParamField>
+<ParamField body="defaultJobKind" type="string">
+  Default job kind for scheduler runs. One of `"sync-data"` or `"sync-data-and-publish"`.
+</ParamField>
+
+**Example request**
+
+```json
+{
+  "enabled": true,
+  "cron": "0 */6 * * *",
+  "defaultTables": ["locations", "stories", "creation_board"],
+  "defaultJobKind": "sync-data"
+}
+```
+
+---
+
+### POST /api/admin/sync/jobs
+
+Creates a new sync job and returns immediately with `202 Accepted`. The job executes asynchronously in the background.
+
+If a job is already running, the endpoint returns `409 Conflict` with the `currentJobId` in the response body.
+
+**Request body**
+
+<ParamField body="kind" type="string">
+  Job kind. One of `"sync-data"` or `"sync-data-and-publish"`. Defaults to the configured `defaultJobKind`.
+</ParamField>
+<ParamField body="tables" type="string[]">
+  Array of `SyncTableKey` values to include. Defaults to `defaultTables`. Pass a subset to sync only specific tables.
+</ParamField>
+<ParamField body="dependencyMode" type="string">
+  How to handle table dependencies. One of `"read_local"` (default), `"run_dependencies"`, or `"strict"`.
+</ParamField>
+<ParamField body="includeAssets" type="boolean">
+  When `true` (default), downloads Feishu attachments, uploads to OSS, and writes back OSS URLs. When `false`, skips all asset operations and uses existing `OSS_URL` field values.
+</ParamField>
+<ParamField body="continueOnTableError" type="boolean">
+  When `true`, a failed table module does not stop subsequent modules. Defaults to `false`.
+</ParamField>
+<ParamField body="triggeredBy" type="string">
+  Trigger source for audit logging. One of `"admin-ui"`, `"scheduler"`, or `"cli"`.
+</ParamField>
+<ParamField body="note" type="string">
+  Optional free-text note attached to the job record for operator reference.
+</ParamField>
+
+**Example request**
+
+```json
+{
+  "kind": "sync-data",
+  "tables": ["locations", "stories"],
+  "dependencyMode": "read_local",
+  "includeAssets": true,
+  "continueOnTableError": false,
+  "triggeredBy": "admin-ui",
+  "note": "Manual refresh of home page data"
+}
+```
+
+**Example response (202)**
+
+```json
+{
+  "jobId": "sync_20260421_154500_x7k9p2",
+  "status": "queued",
+  "kind": "sync-data",
+  "tables": ["locations", "stories"],
+  "effectiveTables": ["locations", "stories"],
+  "createdAt": "2026-04-21T15:45:00.000Z"
+}
+```
+
+<ResponseField name="jobId" type="string">
+  Unique job identifier. Use this to poll for status.
+</ResponseField>
+<ResponseField name="status" type="string">
+  Initial status, always `"queued"` on creation.
+</ResponseField>
+<ResponseField name="effectiveTables" type="string[]">
+  Final resolved table list after dependency expansion.
+</ResponseField>
+
+---
+
+### GET /api/admin/sync/jobs
+
+Returns the most recent sync jobs ordered by creation time descending. Useful for rendering the job history list in the back-office UI.
+
+**Response** — array of `SyncJobRecord` objects (abbreviated, without `steps` detail).
+
+---
+
+### GET /api/admin/sync/jobs/:jobId
+
+Returns the full `SyncJobRecord` for a single job including all step details, warnings, errors, and publish status. Poll this endpoint after `POST /api/admin/sync/jobs` to track progress.
+
+**Example response**
+
+```json
+{
+  "jobId": "sync_20260421_154500_x7k9p2",
+  "kind": "sync-data-and-publish",
+  "status": "success",
+  "publishStatus": "published",
+  "tables": ["locations", "stories"],
+  "effectiveTables": ["locations", "stories"],
+  "triggeredBy": "admin-ui",
+  "createdAt": "2026-04-21T15:45:00.000Z",
+  "startedAt": "2026-04-21T15:45:00.200Z",
+  "syncedAt": "2026-04-21T15:45:18.000Z",
+  "publishedAt": "2026-04-21T15:47:18.000Z",
+  "finishedAt": "2026-04-21T15:47:18.000Z",
+  "durationMs": 138000,
+  "summary": {
+    "locationCount": 5,
+    "storyCount": 6,
+    "creationIdeaCount": 0,
+    "filesWritten": [
+      "src/config/locations.json",
+      "src/data/content.json"
+    ],
+    "published": true
+  },
+  "steps": [
+    { "step": "locations", "status": "success" },
+    {
+      "step": "stories",
+      "status": "success_with_warnings",
+      "summary": {
+        "totalRecords": 6,
+        "successRecords": 5,
+        "skippedRecords": 0,
+        "failedRecords": 1
+      }
+    },
+    { "step": "publish", "status": "success" }
+  ],
+  "warnings": [],
+  "errors": []
+}
+```
+
+<ResponseField name="publishStatus" type="string">
+  Publish phase state. One of `"not_required"`, `"pending"`, `"building"`, `"published"`, or `"publish_failed"`. Only present for `sync-data-and-publish` jobs.
+</ResponseField>
+<ResponseField name="syncedAt" type="string">
+  ISO timestamp when the data sync phase completed (before the publish phase begins).
+</ResponseField>
+<ResponseField name="publishedAt" type="string">
+  ISO timestamp when the build and restart phase completed successfully.
+</ResponseField>
+<ResponseField name="durationMs" type="number">
+  Total wall-clock duration of the job in milliseconds.
+</ResponseField>
+<ResponseField name="steps" type="SyncJobStep[]">
+  Per-table step records with individual statuses, summaries, warnings, and errors.
+</ResponseField>
+
+---
+
+## Publish flow
+
+For `sync-data-and-publish` jobs the orchestrator runs the following sequence after the sync phase succeeds:
+
+<Steps>
+  <Step title="Acquire publish lock">
+    A file lock at `runtime/admin/sync-lock.json` prevents concurrent publish operations.
+  </Step>
+  <Step title="Sync Feishu data">
+    Table modules run and write updated JSON to `src/data/` and `src/config/`.
+  </Step>
+  <Step title="Validate JSON">
+    Each output file is parsed and checked for minimum validity before committing.
+  </Step>
+  <Step title="Run next build">
+    `next build` is executed. If it fails, the process stops here — the currently running server is **not** interrupted.
+  </Step>
+  <Step title="Restart server">
+    On build success, the server process is restarted (e.g. via PM2). Live pages now serve the new build.
+  </Step>
+  <Step title="Health check and mark published">
+    After restart, a health check confirms the new build is serving. The job's `publishStatus` is updated to `"published"`.
+  </Step>
+</Steps>
+
+<Warning>
+A failed build must never take down the live site. The publish step is designed as an additive phase — if `next build` exits non-zero, the orchestrator marks `publishStatus: "publish_failed"`, logs the error, and leaves the existing process running unchanged.
+</Warning>
+
+## Concurrency model
+
+v1 enforces **single-task serial execution**:
+
+- Only one sync job may be in `running` status at any time.
+- A new `POST /api/admin/sync/jobs` request while a job is running returns `409 Conflict` with the `currentJobId`.
+- Lock state is persisted at `runtime/admin/sync-lock.json`.
+
+### Lock file structure
+
+```json
+{
+  "jobId": "sync_20260421_154500_x7k9p2",
+  "pid": 12345,
+  "createdAt": "2026-04-21T15:45:00.000Z",
+  "expiresAt": "2026-04-21T16:05:00.000Z"
+}
+```
+
+If a lock is found past its `expiresAt`, the orchestrator marks the stale job as `failed` (with reason `lock expired`), releases the lock, and allows new jobs to proceed.
+
+## Runtime file layout
+
+```text
+runtime/
+  admin/
+    sync-config.json     # Scheduler config (writable via PATCH /config)
+    sync-lock.json       # Concurrency lock
+    sync-jobs/
+      <job-id>.json      # One file per job record
+logs/
+  sync/
+    <job-id>.log         # Per-job log file
+
+src/
+  config/
+    locations.json       # Location coordinates (build-time)
+  data/
+    content.json         # Stories grouped by location (build-time)
+    creation-board.json  # Raw CreationIdea records (build-time)
+    contributors.json    # Contributor credits (build-time)
+```
+
+<Note>
+`runtime/` and `logs/` should be added to `.gitignore`. They are operational state, not source code, and must not be committed or included in the Next.js build.
+</Note>
+
+In production, the runtime and log directories can be relocated via environment variables:
+
+```bash
+SYNC_RUNTIME_DIR=/var/lib/hnu-timeletter/runtime
+SYNC_LOG_DIR=/var/log/hnu-timeletter/sync
+```
+
+## Adding a new Feishu table
+
+<Steps>
+  <Step title="Add the key to types">
+    Extend `SyncTableKey` in the sync types file with the new table identifier.
+  </Step>
+  <Step title="Create the module file">
+    Add `src/lib/sync/tables/<new-table>.module.ts` implementing the `TableSyncModule` interface.
+  </Step>
+  <Step title="Add a writer if needed">
+    If the module produces a new JSON file, add a writer under `src/lib/sync/writers/`.
+  </Step>
+  <Step title="Register in the table registry">
+    Import and register the module in `src/lib/sync/registry.ts`. API parameter validation, the back-office table list, default table set, and dependency resolution all derive from the registry automatically.
+  </Step>
+  <Step title="Update default tables if appropriate">
+    If the new table should be included in all scheduled runs, add its key to `defaultTables` in the admin config.
+  </Step>
+</Steps>

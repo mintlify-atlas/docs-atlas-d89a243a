@@ -1,0 +1,170 @@
+---
+title: "Creation board: community ideas and contributions"
+description: "How the /creation route aggregates Feishu-synced community submissions into a masonry sticky-note wall grouped by CardID with one-click idea submission."
+---
+
+The creation board at `/creation` is the community layer of HNU-TimeLetter: a public wall of galgame × campus location ideas submitted by group members. While the main map experience showcases finished works, the creation board preserves the raw creative proposals that feed the pipeline — character suggestions, scene descriptions, reference images, and story outlines — so that future contributors can build directly on existing ideas rather than starting from scattered chat history. The page is read-only for visitors; new submissions are made via a Feishu form linked from each card. All components are under `src/components/creation/`.
+
+## Route and data flow
+
+```
+Feishu 揭示板 table
+        │
+        ▼ sync-feishu script
+src/data/creation-board.json   ← static file, committed to repo
+        │
+        ▼ page render
+/creation  →  CreationBoardPage
+               └── CreationMasonry
+                    └── CreationNoteCard (per CardID)
+                         └── CreationNoteEntry (per record)
+```
+
+The Feishu table (`揭示板`, view `收集结果`) is the single source of truth for content. A sync script reads all records via the Feishu API, downloads any image attachments, uploads them to Alibaba Cloud OSS, back-fills the OSS URLs into the `images` field, and writes the cleaned records to `src/data/creation-board.json`. The `/creation` page never calls the Feishu API at runtime — it reads only the static JSON file.
+
+## Data model
+
+The page renders `CreationCard` objects assembled by aggregating the raw records from `creation-board.json` by `CardID`.
+
+```typescript
+// src/lib/types.ts
+
+// Per-card render unit (aggregated from multiple raw records)
+export interface CreationCard {
+  id: string;           // CardID
+  cardId: string;       // Business identifier, e.g. "CARD001"; falls back to auto-number or record_id
+  addIdeaUrl: string;   // Pre-filled Feishu form URL for this CardID
+  entries: CreationEntry[];
+}
+
+// Single raw submission record
+export interface CreationEntry {
+  id: string;           // record_id from Feishu
+  cardId: string;       // Parent CardID
+  author: string;       // Preferred nickname; falls back to Feishu submitter name
+  tags: string;         // Single-value capsule tag: 灵感 / 故事 / 画面描述 / 参考图 / 其他
+  content: string;      // Main text body (also holds OSS URLs when tag = 参考图)
+  images: string[];     // OSS-hosted image URLs (populated by sync script)
+  createdAt: string;    // ISO timestamp from Feishu 提交时间 field
+}
+```
+
+<Note>
+Duplicate `CardID` values in the source data are **intentional**. Multiple contributors can add entries to the same card by re-submitting the Feishu form with the same `CardID` value. The aggregation step in the page groups these into a single `CreationCard` with multiple stacked `entries`.
+</Note>
+
+## Card layout and masonry
+
+`CreationMasonry` implements a CSS multi-column waterfall. Column counts respond to viewport width:
+
+| Viewport | Columns |
+|----------|---------|
+| Desktop `≥ 1280px` | 4–5 |
+| Tablet `768px – 1280px` | 3 |
+| Mobile `≤ 768px` | 1–2 |
+
+Cards use `break-inside: avoid` to prevent a single card from splitting across columns. Card heights vary with the number of stacked entries, so the masonry naturally produces the uneven "creation wall" silhouette described in the design spec.
+
+## Card design
+
+Each `CreationNoteCard` visually echoes a sticky note pinned to a corkboard:
+
+<CardGroup cols={2}>
+  <Card title="Background colour" icon="palette">
+    A random pastel from a curated low-saturation macaron palette is assigned at aggregation time — one hue per `CardID`, consistent across page loads for the same card. The same hue is applied to all stacked entries inside the card; there is no per-entry colour variation.
+  </Card>
+  <Card title="Sharp corners" icon="square">
+    Cards use `border-radius: 0`. The design explicitly avoids rounded corners to reinforce the "torn notepad page" aesthetic, distinguishing creation board cards from the rounded modals and pill components elsewhere in the site.
+  </Card>
+  <Card title="Add idea button" icon="plus">
+    A white button labelled "新增创意" sits fixed at the top-right of each card. It is always visible — no hover requirement. Clicking opens the pre-filled Feishu form in a new tab.
+  </Card>
+  <Card title="Subtle tilt and shadow" icon="layers">
+    Cards may carry a small random rotation offset and drop shadow variation to simulate physical pinning. The range is deliberately narrow to keep the wall readable, not chaotic.
+  </Card>
+</CardGroup>
+
+### Add idea URL template
+
+```typescript
+// src/components/creation/utils.ts
+const ADD_IDEA_URL_TEMPLATE =
+  'https://himematsu.feishu.cn/share/base/form/' +
+  'shrcnhSnlbEAclIwPC770VdOmWf?hide_CardID=1&prefill_CardID=';
+
+// addIdeaUrl is constructed per card during aggregation:
+addIdeaUrl: `${ADD_IDEA_URL_TEMPLATE}${encodeURIComponent(cardId)}`,
+```
+
+The `hide_CardID=1` parameter hides the `CardID` field in the Feishu form so submitters see a clean form, but the value is still pre-filled and submitted automatically.
+
+## Entry rendering rules
+
+Each `CreationEntry` inside a card follows these display rules, applied by `CreationNoteEntry`:
+
+```
+entry.tags === '参考图' AND entry.images.length > 0
+  → render images[] as an image gallery
+
+entry.tags === '参考图' AND entry.images is empty
+  → render entry.content as text (fallback)
+
+all other tags
+  → render entry.content as text
+```
+
+The entry header row always shows:
+- **Left:** `author` (preferred nickname)
+- **Right:** `tags` as a rounded capsule badge
+
+Entries within a card are separated by a thin divider line. The first entry sits below the "新增创意" button's reserved space so button and content never overlap.
+
+## Page background
+
+The page body uses a warm paper-tone base (`#ece9e4`) with a **grid draft-line overlay** — a repeating CSS background pattern of fine horizontal and vertical lines at low opacity. This creates the "corkboard planning wall" atmosphere without interfering with card readability. The grid lines are pure CSS (`background-image: repeating-linear-gradient`) and add no DOM elements.
+
+## Component tree
+
+```
+CreationBoardPage          src/components/creation/CreationBoardPage.tsx
+├── CreationBoardHeader    src/components/creation/CreationBoardHeader.tsx
+│     Title + one-line description
+└── CreationMasonry        src/components/creation/CreationMasonry.tsx
+      Reads creation-board.json, aggregates by CardID, renders cards
+      └── CreationNoteCard (×N)   src/components/creation/CreationNoteCard.tsx
+            Card shell + pastel background + "新增创意" button
+            └── CreationNoteEntry (×M)  src/components/creation/CreationNoteEntry.tsx
+                  author / tags header + content or image body
+```
+
+Helper functions for colour assignment, CardID aggregation, and URL templating are in `src/components/creation/utils.ts`.
+
+## Interaction behaviour
+
+<Steps>
+
+### Default: scan reading
+
+The full card content is visible immediately — no collapsed state, no pagination. Visitors can scroll vertically through the entire board in one pass. This supports the "scan first, read deeper on interest" browsing pattern.
+
+### Hover / touch feedback
+
+Cards lift slightly on hover or touch (`translateY: -2px`, shadow increase). The angle correction ("角度归正") animation gently nudges a tilted card back toward straight on hover, reinforcing the physical metaphor. Animations use short durations (`150–200 ms`) with no spring bounce to keep the feeling light and unobtrusive.
+
+### Tap "新增创意"
+
+Opens the pre-filled Feishu form in a new tab. No in-page modal or form wrapper. The form handles its own submission confirmation.
+
+</Steps>
+
+## Empty and loading states
+
+| State | Behaviour |
+|-------|-----------|
+| Loading | Paper-texture skeleton cards in the masonry columns; no generic grey bars |
+| Empty | Explicit message: "当前还没有公开灵感，欢迎先在群内发起第一条共创提案" |
+| Long entry | Card grows to accommodate content; no truncation in first version. Masonry column height adjusts automatically. |
+
+<Tip>
+The creation board shares the same global navigation bar as the rest of the site. The "公示板" nav item is active when on `/creation`. Because the board page does not use the envelope animation or Lenis scroll, the nav bar appears immediately without any entrance delay.
+</Tip>
